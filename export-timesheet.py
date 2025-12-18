@@ -132,29 +132,46 @@ def process_timesheet(csv_file, output_excel):
             total_row_idx        = start_row + n + 1
             rate_row_idx         = total_row_idx + 1
 
-            def write_location_section(start_row, header_title):
+            def write_location_section(start_row, header_title, placeholders=None):
+                placeholders = placeholders or ["Apt X", "Apt X"]
                 worksheet.write(start_row, 0, header_title, header_format)
                 section_headers = ['Date', 'Check-in', 'Check-out', 'Rate $', 'Details']
                 for col, name in enumerate(section_headers, start=1):
                     worksheet.write(start_row, col, name, header_format)
 
                 data_start = start_row + 1
-                for offset in range(2):
-                    worksheet.write(data_start + offset, 0, "Apt X")
+                for offset, text in enumerate(placeholders):
+                    worksheet.write(data_start + offset, 0, text)
 
-                total_row = data_start + 2
+                total_row = data_start + len(placeholders)
                 first_excel_row = data_start + 1
-                last_excel_row = data_start + 2
+                last_excel_row = data_start + len(placeholders)
                 worksheet.write(total_row, 0, 'Total $')
                 worksheet.write_formula(total_row, 4, f"=SUM(E{first_excel_row}:E{last_excel_row})", currency_format)
-                return total_row, total_row + 2
+                return {
+                    "total_row": total_row,
+                    "next_start": total_row + 2,
+                    "data_start_excel": first_excel_row,
+                    "data_end_excel": last_excel_row,
+                }
 
             current_section_row = rate_row_idx + 4
             section_totals_excel_rows = []
-            for section_header in ("Mango Villas", "Casa Damisela"):
-                section_total_row_idx, next_start_row = write_location_section(current_section_row, section_header)
-                section_totals_excel_rows.append(section_total_row_idx + 1)
-                current_section_row = next_start_row
+            section_definitions = [
+                ("Mango Villas", ["Apt X", "Apt X"]),
+                ("Casa Damisela", ["Apt X", "Apt X"]),
+                ("Other", ["Details here", ""])
+            ]
+            section_clean_ranges = []
+            for section_header, placeholders in section_definitions:
+                section_info = write_location_section(
+                    current_section_row, section_header, placeholders
+                )
+                section_totals_excel_rows.append(section_info["total_row"] + 1)
+                section_clean_ranges.append(
+                    (section_info["data_start_excel"], section_info["data_end_excel"])
+                )
+                current_section_row = section_info["next_start"]
 
             # Summary header directly after the location sections
             summary_header_row = current_section_row
@@ -255,23 +272,41 @@ def process_timesheet(csv_file, output_excel):
             # Capture summary references
             hours_cell = f"={quote_sheetname(sheet_name)}!E{total_row_idx + 1}"
             total_cell = f"={quote_sheetname(sheet_name)}!E{total_dollar_idx + 1}"
-            summary_entries.append((sheet_name, hours_cell, total_cell))
+
+            sheet_ref = quote_sheetname(sheet_name)
+            if n > 0:
+                main_start_excel = start_row + 2
+                main_end_excel = start_row + n + 1
+                main_clean_count = f"COUNTA({sheet_ref}!B{main_start_excel}:B{main_end_excel})"
+            else:
+                main_clean_count = "0"
+
+            section_clean_counts = [
+                f'COUNTIF({sheet_ref}!E{start}:E{end},"<>")' for start, end in section_clean_ranges
+            ]
+            cleans_parts = [main_clean_count, *section_clean_counts]
+            cleans_formula = "=" + "+".join(cleans_parts) if cleans_parts else "=0"
+
+            summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell))
 
         # Populate summary sheet
         summary_sheet.write(0, 0, "Person", summary_header_format)
         summary_sheet.write(0, 1, "Total Hours", summary_header_format)
-        summary_sheet.write(0, 2, "Total $", summary_header_format)
-        for idx, (label, hours_ref, total_ref) in enumerate(summary_entries, start=1):
+        summary_sheet.write(0, 2, "Total Cleans", summary_header_format)
+        summary_sheet.write(0, 3, "Total $", summary_header_format)
+        for idx, (label, hours_ref, cleans_ref, total_ref) in enumerate(summary_entries, start=1):
             summary_sheet.write(idx, 0, label)
             summary_sheet.write_formula(idx, 1, hours_ref)
-            summary_sheet.write_formula(idx, 2, total_ref, currency_format)
+            summary_sheet.write_formula(idx, 2, cleans_ref)
+            summary_sheet.write_formula(idx, 3, total_ref, currency_format)
         if summary_entries:
             total_row = len(summary_entries) + 1
             summary_sheet.write(total_row, 0, "All sheets total", summary_header_format)
             summary_sheet.write_formula(total_row, 1, f"=SUM(B2:B{total_row})")
-            summary_sheet.write_formula(total_row, 2, f"=SUM(C2:C{total_row})", currency_format)
+            summary_sheet.write_formula(total_row, 2, f"=SUM(C2:C{total_row})")
+            summary_sheet.write_formula(total_row, 3, f"=SUM(D2:D{total_row})", light_green_currency_format)
         summary_sheet.set_column('A:A', 35)
-        summary_sheet.set_column('B:C', 18)
+        summary_sheet.set_column('B:D', 18)
 
     print(f"Excel file '{output_excel}' created successfully.")
 
