@@ -1,0 +1,14 @@
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# OS / editor noise
+.DS_Store
+
+# Generated spreadsheets and local data
+*.xlsx
+Raw/
+Timesheets/
