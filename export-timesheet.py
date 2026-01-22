@@ -195,9 +195,17 @@ def process_timesheet(csv_file, output_excel):
             worksheet.write_formula(total_rate_row_idx, 4, f"=E{rate_row_idx+1} * E{total_row_idx+1}", currency_format)
 
             # Total hours
-            total_hours = round(df_person['Hours'].sum(), 2)
             worksheet.write(total_row_idx, 0, "Total hours")
-            worksheet.write(total_row_idx, 4, total_hours)
+            hours_start_excel = start_row + 2
+            hours_end_excel = start_row + n + 1 if n > 0 else hours_start_excel
+            # Per-row Hours formula so added rows recalc automatically
+            hours_col_idx = 4
+            for i in range(n):
+                row_idx = start_row + 1 + i  # zero-based worksheet row
+                excel_row = row_idx + 1      # Excel row number (1-based)
+                formula = f'=IF(AND(C{excel_row}<>"",D{excel_row}<>""),ROUND((D{excel_row}-C{excel_row})*24,2),"")'
+                worksheet.write_formula(row_idx, hours_col_idx, formula)
+            worksheet.write_formula(total_row_idx, 4, f"=SUM(E{hours_start_excel}:E{hours_end_excel})")
 
             # Rate (from lookup)
             rate = 0
@@ -262,6 +270,15 @@ def process_timesheet(csv_file, output_excel):
             withheld_excel_row = withheld_row_idx + 1
             final_total_formula = f"=E{total_excel_row} - E{withheld_excel_row}"
             worksheet.write_formula(total_dollar_idx, 4, final_total_formula, light_green_currency_format)
+            # Reviewed marker cell to the right of Total $
+            review_cell = f"F{total_dollar_idx + 1}"
+            worksheet.write_blank(total_dollar_idx, 5, None)
+            worksheet.data_validation(total_dollar_idx, 5, total_dollar_idx, 5, {
+                "validate": "list",
+                "source": ["", "y"],
+                "input_title": "Reviewed?",
+                "input_message": "Choose 'y' once this sheet is reviewed.",
+            })
 
             # Update subtotal formula to reference new Total $ row
             section_total_refs = [f"E{row}" for row in section_totals_excel_rows]
@@ -272,6 +289,7 @@ def process_timesheet(csv_file, output_excel):
             # Capture summary references
             hours_cell = f"={quote_sheetname(sheet_name)}!E{total_row_idx + 1}"
             total_cell = f"={quote_sheetname(sheet_name)}!E{total_dollar_idx + 1}"
+            reviewed_cell = f"=IF({quote_sheetname(sheet_name)}!{review_cell}=\"y\",\"y\",\"\")"
 
             sheet_ref = quote_sheetname(sheet_name)
             if n > 0:
@@ -287,18 +305,20 @@ def process_timesheet(csv_file, output_excel):
             cleans_parts = [main_clean_count, *section_clean_counts]
             cleans_formula = "=" + "+".join(cleans_parts) if cleans_parts else "=0"
 
-            summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell))
+            summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell, reviewed_cell))
 
         # Populate summary sheet
         summary_sheet.write(0, 0, "Person", summary_header_format)
         summary_sheet.write(0, 1, "Total Hours", summary_header_format)
         summary_sheet.write(0, 2, "Total Cleans", summary_header_format)
         summary_sheet.write(0, 3, "Total $", summary_header_format)
-        for idx, (label, hours_ref, cleans_ref, total_ref) in enumerate(summary_entries, start=1):
+        summary_sheet.write(0, 4, "Reviewed", summary_header_format)
+        for idx, (label, hours_ref, cleans_ref, total_ref, reviewed_ref) in enumerate(summary_entries, start=1):
             summary_sheet.write(idx, 0, label)
             summary_sheet.write_formula(idx, 1, hours_ref)
             summary_sheet.write_formula(idx, 2, cleans_ref)
             summary_sheet.write_formula(idx, 3, total_ref, currency_format)
+            summary_sheet.write_formula(idx, 4, reviewed_ref)
         if summary_entries:
             total_row = len(summary_entries) + 1
             summary_sheet.write(total_row, 0, "All sheets total", summary_header_format)
@@ -306,7 +326,7 @@ def process_timesheet(csv_file, output_excel):
             summary_sheet.write_formula(total_row, 2, f"=SUM(C2:C{total_row})")
             summary_sheet.write_formula(total_row, 3, f"=SUM(D2:D{total_row})", light_green_currency_format)
         summary_sheet.set_column('A:A', 35)
-        summary_sheet.set_column('B:D', 18)
+        summary_sheet.set_column('B:E', 18)
 
     print(f"Excel file '{output_excel}' created successfully.")
 
