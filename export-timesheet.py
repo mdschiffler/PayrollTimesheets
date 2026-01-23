@@ -2,11 +2,45 @@ import pandas as pd
 import sys
 from datetime import datetime, timedelta
 import os
+import re
+import unicodedata
 from xlsxwriter.utility import quote_sheetname
 
-def process_timesheet(csv_file, output_excel):
+def normalize_name_tokens(name):
+    if not isinstance(name, str):
+        return []
+    normalized = unicodedata.normalize("NFKD", name)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.upper()
+    normalized = re.sub(r"[^A-Z\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized.split()
+
+
+def name_key(name):
+    tokens = normalize_name_tokens(name)
+    if len(tokens) >= 2:
+        return tokens[0], tokens[1]
+    if len(tokens) == 1:
+        return tokens[0], ""
+    return "", ""
+
+
+def map_turno_location(property_group, property_alias):
+    combined = f"{property_group or ''} {property_alias or ''}".upper()
+    if "MANGO" in combined:
+        return "Mango Villas"
+    if "DAMISELA" in combined:
+        return "Casa Damisela"
+    return "Other"
+
+
+def process_timesheet(csv_file, output_excel, turno_csv):
     if not os.path.exists(csv_file):
         print(f"Input file not found: {csv_file}")
+        sys.exit(1)
+    if not os.path.exists(turno_csv):
+        print(f"Turno file not found: {turno_csv}")
         sys.exit(1)
 
     # Load main timesheet CSV
@@ -85,6 +119,91 @@ def process_timesheet(csv_file, output_excel):
         df_person = df_person[cols]
         persons[(person_id, person_name)] = df_person
 
+    # Load and map turno CSV rows to people/locations
+    turno_df = pd.read_csv(turno_csv)
+    turno_df.columns = [col.strip() for col in turno_df.columns]
+    required_turno_cols = [
+        "Teammate",
+        "Start Date & Time",
+        "End Date & Time",
+        "Cleaning Price",
+        "Property Alias",
+        "Property Group",
+    ]
+    missing_turno_cols = [col for col in required_turno_cols if col not in turno_df.columns]
+    if missing_turno_cols:
+        print(f"Turno file missing columns: {', '.join(missing_turno_cols)}")
+        sys.exit(1)
+
+    turno_df["Start Dt"] = pd.to_datetime(turno_df["Start Date & Time"], errors="coerce")
+    turno_df["End Dt"] = pd.to_datetime(turno_df["End Date & Time"], errors="coerce")
+    turno_df["Cleaning Price"] = pd.to_numeric(turno_df["Cleaning Price"], errors="coerce")
+
+    person_key_map = {}
+    for person_key in persons.keys():
+        first, last1 = name_key(person_key[1])
+        if not first or not last1:
+            continue
+        person_key_map.setdefault((first, last1), []).append(person_key)
+
+    turno_events = {}
+    for idx, row in turno_df.iterrows():
+        teammate_val = row.get("Teammate", "")
+        if pd.isna(teammate_val):
+            print(f"Unmatched turno row {idx + 2}: missing teammate name")
+            continue
+        teammate = str(teammate_val).strip()
+        first, last1 = name_key(teammate)
+        if not first or not last1:
+            print(f"Unmatched turno row {idx + 2}: invalid teammate name '{teammate}'")
+            continue
+
+        candidates = person_key_map.get((first, last1), [])
+        if len(candidates) == 0:
+            print(f"Unmatched turno row {idx + 2}: teammate '{teammate}' not found in timesheet")
+            continue
+        if len(candidates) > 1:
+            candidate_labels = ", ".join([f"{pid} {pname}" for pid, pname in candidates])
+            print(
+                f"Unmatched turno row {idx + 2}: teammate '{teammate}' matches multiple people ({candidate_labels})"
+            )
+            continue
+
+        start_dt = row["Start Dt"]
+        end_dt = row["End Dt"]
+        rate_val = row["Cleaning Price"]
+        if pd.isna(start_dt) or pd.isna(end_dt):
+            print(f"Unmatched turno row {idx + 2}: missing start/end time for '{teammate}'")
+            continue
+        if pd.isna(rate_val):
+            print(f"Unmatched turno row {idx + 2}: missing cleaning price for '{teammate}'")
+            continue
+
+        property_alias_val = row.get("Property Alias", "")
+        property_group_val = row.get("Property Group", "")
+        property_alias = "" if pd.isna(property_alias_val) else str(property_alias_val).strip()
+        property_group = "" if pd.isna(property_group_val) else str(property_group_val).strip()
+        location = map_turno_location(property_group, property_alias)
+
+        person_key = candidates[0]
+        event = {
+            "date": start_dt.strftime("%m/%d/%Y"),
+            "start": start_dt.strftime("%H:%M:%S"),
+            "end": end_dt.strftime("%H:%M:%S"),
+            "rate": float(rate_val),
+            "details": property_alias,
+            "label": property_alias or "Details here",
+            "start_dt": start_dt,
+        }
+        turno_events.setdefault(
+            person_key, {"Mango Villas": [], "Casa Damisela": [], "Other": []}
+        )
+        turno_events[person_key][location].append(event)
+
+    for location_groups in turno_events.values():
+        for events in location_groups.values():
+            events.sort(key=lambda item: item["start_dt"])
+
     # Write to Excel
     with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
         workbook = writer.book
@@ -117,7 +236,6 @@ def process_timesheet(csv_file, output_excel):
             worksheet.write(0, 0, f"Person ID: {person_id}, Name: {person_name}", light_green_text_format)
             worksheet.write(0, 1, '', light_green_text_format)
             # Insert row for timesheet period (parsed from filename)
-            import re
             match = re.search(r'(\d{2}-\d{2}-\d{4})', os.path.basename(csv_file))
             if match:
                 end_date = datetime.strptime(match.group(1), '%m-%d-%Y')
@@ -132,20 +250,35 @@ def process_timesheet(csv_file, output_excel):
             total_row_idx        = start_row + n + 1
             rate_row_idx         = total_row_idx + 1
 
-            def write_location_section(start_row, header_title, placeholders=None):
+            def write_location_section(start_row, header_title, placeholders=None, data_rows=None):
                 placeholders = placeholders or ["Apt X", "Apt X"]
+                data_rows = data_rows or []
                 worksheet.write(start_row, 0, header_title, header_format)
-                section_headers = ['Date', 'Check-in', 'Check-out', 'Rate $', 'Details']
+                section_headers = ['Date', 'Start', 'End', 'Rate $', 'Details']
                 for col, name in enumerate(section_headers, start=1):
                     worksheet.write(start_row, col, name, header_format)
 
                 data_start = start_row + 1
-                for offset, text in enumerate(placeholders):
-                    worksheet.write(data_start + offset, 0, text)
+                row_count = max(len(placeholders), len(data_rows))
+                if row_count == 0:
+                    row_count = 1
 
-                total_row = data_start + len(placeholders)
+                for offset in range(row_count):
+                    label = placeholders[offset] if offset < len(placeholders) else ""
+                    if offset < len(data_rows):
+                        row_data = data_rows[offset]
+                        label = row_data.get("label", label)
+                        worksheet.write(data_start + offset, 1, row_data.get("date", ""))
+                        worksheet.write(data_start + offset, 2, row_data.get("start", ""))
+                        worksheet.write(data_start + offset, 3, row_data.get("end", ""))
+                        worksheet.write_number(
+                            data_start + offset, 4, row_data.get("rate", 0), currency_format
+                        )
+                    worksheet.write(data_start + offset, 0, label)
+
+                total_row = data_start + row_count
                 first_excel_row = data_start + 1
-                last_excel_row = data_start + len(placeholders)
+                last_excel_row = data_start + row_count
                 worksheet.write(total_row, 0, 'Total $')
                 worksheet.write_formula(total_row, 4, f"=SUM(E{first_excel_row}:E{last_excel_row})", currency_format)
                 return {
@@ -154,6 +287,8 @@ def process_timesheet(csv_file, output_excel):
                     "data_start_excel": first_excel_row,
                     "data_end_excel": last_excel_row,
                 }
+
+            person_turno = turno_events.get((person_id, person_name), {})
 
             current_section_row = rate_row_idx + 4
             section_totals_excel_rows = []
@@ -164,8 +299,9 @@ def process_timesheet(csv_file, output_excel):
             ]
             section_clean_ranges = []
             for section_header, placeholders in section_definitions:
+                data_rows = person_turno.get(section_header, [])
                 section_info = write_location_section(
-                    current_section_row, section_header, placeholders
+                    current_section_row, section_header, placeholders, data_rows
                 )
                 section_totals_excel_rows.append(section_info["total_row"] + 1)
                 section_clean_ranges.append(
@@ -228,7 +364,7 @@ def process_timesheet(csv_file, output_excel):
             if start_date is not None:
                 if (today - start_date).days < 28 or today.month == 1:
                     # Within 4 weeks or January
-                    extras_amount = 0
+                    extras_amount = extra_val
                     exclusion_amount = 0
                     show_red = True
                 else:
@@ -331,10 +467,11 @@ def process_timesheet(csv_file, output_excel):
     print(f"Excel file '{output_excel}' created successfully.")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python export_timesheet.py <input_csv> <output_excel>")
+    if len(sys.argv) != 4:
+        print("Usage: python export-timesheet.py <output_excel> <input_csv> <turno_csv>")
         sys.exit(1)
 
-    input_csv = sys.argv[1]
-    output_excel = sys.argv[2]
-    process_timesheet(input_csv, output_excel)
+    output_excel = sys.argv[1]
+    input_csv = sys.argv[2]
+    turno_csv = sys.argv[3]
+    process_timesheet(input_csv, output_excel, turno_csv)
