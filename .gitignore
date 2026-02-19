@@ -13,3 +13,8 @@ venv/
 Raw/
 Timesheets/
 Quarterly Cleaning Expenses/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec

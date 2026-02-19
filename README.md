@@ -1,33 +1,49 @@
-# Payroll Timesheet Exporter
+# Optihome Payroll Processing
 
-Python script that converts timeclock CSVs into per-employee Excel workbooks with summary and location sections.
+Converts timeclock and turno CSVs into per-employee Excel workbooks with hourly totals, cleaning job details, and a summary sheet.
 
-## Requirements
-- Python 3.9+ with `pandas` and `xlsxwriter`
-- `timesheet-rates.csv` (ID,RATE,START,EXTRA,DETAILS) placed alongside the script
+## How to use (Desktop App)
 
-## Usage
+1. Double-click **Optihome Payroll Processing.app** (in the `dist/` folder).
+2. Click **Browse** next to "Timeclock CSV" and select the `_time.csv` file from `Raw/`.
+3. Click **Browse** next to "Turno CSV" and select the `_turno.csv` file from `Raw/`.
+4. The output path is auto-filled. Change it with **Save As** if needed.
+5. Verify the **Employee Rates CSV** path points to `timesheet-rates.csv`. Use **Open** to edit rates or **Browse** to pick a different file.
+6. Click **Run Export**.
+7. The Excel file is created in `Timesheets/` and opens automatically when done.
+
+## How to use (Command Line)
+
 ```
-python export-timesheet.py Timesheets/<output.xlsx> Raw/<input.csv> Raw/<turno.csv>
+python export-timesheet.py Timesheets/MM-DD-YYYY.xlsx Raw/MM-DD-YYYY_time.csv Raw/MM-DD-YYYY_turno.csv
 ```
 
-The script parses punch records, applies rates from `timesheet-rates.csv`, builds individual worksheets per person, splits the location section into “Mango Villas” and “Casa Damisela” with placeholder rows, and adds a Summary tab.
+## Input files
+
+- **Timeclock CSV** (`_time.csv`) — punch-in/out records exported from the timeclock system. Place in `Raw/`.
+- **Turno CSV** (`_turno.csv`) — cleaning job records exported from Turno. Place in `Raw/`.
+- **Employee Rates CSV** (`timesheet-rates.csv`) — lookup table with columns: ID, RATE, START, EXTRA, DETAILS. Lives in the project root.
+
+## Output
+
+An Excel workbook with:
+- One sheet per employee showing hours worked and cleaning jobs
+- Location sections split into Mango Villas, Casa Damisela, and Other
+- A Summary sheet with totals for all employees
 
 ## Notes
-- Input CSV filenames ending with a date like `...-MM-DD-YYYY.csv` set the week range shown on each sheet.
-- Outputs and timeclock CSVs are ignored by git (see `.gitignore`).
 
-## Super simple step-by-step
-1) Open the **Terminal** app (Applications → Utilities → Terminal).
-2) Copy/paste this and press Enter:
+- Input CSV filenames should end with a date like `MM-DD-YYYY` (e.g., `01-28-2026_time.csv`). This sets the week range shown on each sheet.
+- Generated spreadsheets and raw CSVs are excluded from git.
+
+## Building the app
+
+Requires Python 3.9+ with Tcl/Tk support and a virtual environment:
+
+```bash
+source venv/bin/activate
+pip install pandas xlsxwriter pyinstaller
+bash build_app.sh
 ```
-cd "/Users/mds/Library/Mobile Documents/com~apple~CloudDocs/AA-MDS-REAL ESTATE/aa-Payroll"
-```
-3) Make sure the two input files are in the `Raw` folder:
-   - The timeclock file (ends with `_time.csv`)
-   - The turno file (ends with `_turno.csv`)
-4) Copy/paste this command, replacing the filenames with the ones you want:
-```
-python export-timesheet.py Timesheets/mm-dd-2026.xlsx Raw/mm-dd-2026_time.csv Raw/mm-dd-2026_turno.csv
-```
-5) Press Enter. The Excel file will appear in the `Timesheets` folder.
+
+Output: `dist/Optihome Payroll Processing.app`

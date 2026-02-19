@@ -35,26 +35,42 @@ def map_turno_location(property_group, property_alias):
     return "Other"
 
 
-def process_timesheet(csv_file, output_excel, turno_csv):
-    if not os.path.exists(csv_file):
-        print(f"Input file not found: {csv_file}")
-        sys.exit(1)
-    if not os.path.exists(turno_csv):
-        print(f"Turno file not found: {turno_csv}")
-        sys.exit(1)
+def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
+    """Process timesheet and turno CSVs into an Excel workbook.
 
-    # Load main timesheet CSV
-    df = pd.read_csv(csv_file)
-    df.columns = [col.strip() for col in df.columns]
+    At least one of csv_file or turno_csv must be provided.
+    Returns a tuple (message, warnings) on success.
+    Raises FileNotFoundError or ValueError on fatal errors.
+    """
+    warnings = []
 
-    # Load rates CSV (ID,RATE,START,EXTRA,DETAILS) from parent folder of the input CSV
-    csv_dir = os.path.dirname(csv_file)
-    parent_dir = os.path.abspath(os.path.join(csv_dir, os.pardir))
-    rates_file = os.path.join(parent_dir, "timesheet-rates.csv")
+    has_timeclock = bool(csv_file and csv_file.strip())
+    has_turno = bool(turno_csv and turno_csv.strip())
+
+    if not has_timeclock and not has_turno:
+        raise ValueError("At least one input file (timeclock CSV or turno CSV) is required.")
+
+    if has_timeclock and not os.path.exists(csv_file):
+        raise FileNotFoundError(f"Input file not found: {csv_file}")
+    if has_turno and not os.path.exists(turno_csv):
+        raise FileNotFoundError(f"Turno file not found: {turno_csv}")
+
+    # Reference file for rates lookup and date parsing
+    date_source_file = csv_file if has_timeclock else turno_csv
+
+    # Load rates CSV (ID,RATE,START,EXTRA,DETAILS)
+    # Use explicit path if provided, otherwise look in parent folder of input CSV
+    if rates_csv and os.path.exists(rates_csv):
+        rates_file = rates_csv
+    else:
+        csv_dir = os.path.dirname(date_source_file)
+        parent_dir = os.path.abspath(os.path.join(csv_dir, os.pardir))
+        rates_file = os.path.join(parent_dir, "timesheet-rates.csv")
     if os.path.exists(rates_file):
         rates_df = pd.read_csv(rates_file)
         rates_df['START'] = pd.to_datetime(rates_df['START'], errors='coerce')
         rates_dict = {}
+        rates_by_name = {}  # name_key -> ID for turno-only matching
         for _, row in rates_df.iterrows():
             rates_dict[row['ID']] = {
                 'RATE': row['RATE'],
@@ -62,147 +78,190 @@ def process_timesheet(csv_file, output_excel, turno_csv):
                 'EXTRA': row['EXTRA'],
                 'DETAILS': row['DETAILS'] if 'DETAILS' in row else ''
             }
+            # Build name-based lookup if NAME column exists and is filled
+            if 'NAME' in rates_df.columns and pd.notna(row.get('NAME')) and str(row['NAME']).strip():
+                nk = name_key(str(row['NAME']).strip())
+                if nk[0]:
+                    rates_by_name[nk] = row['ID']
     else:
-        print("Warning: 'timesheet-rates.csv' not found. All rates will default to $0.")
+        warnings.append("'timesheet-rates.csv' not found. All rates will default to $0.")
         rates_dict = {}
+        rates_by_name = {}
 
-    # Combine Punch Date + Time, supporting multiple date formats
-    datetime_str = df['Punch Date'].str.strip() + " " + df['Attendance record'].str.strip()
-
-    # Try parsing with both possible date formats
-    df['Datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
-    mask_failed = df['Datetime'].isna()
-    if mask_failed.any():
-        df.loc[mask_failed, 'Datetime'] = pd.to_datetime(
-            datetime_str[mask_failed], format='%m/%d/%Y %H:%M:%S', errors='coerce'
-        )
-
-    # Drop rows that still couldn't be parsed
-    if df['Datetime'].isna().any():
-        print("Warning: some datetime entries could not be parsed and will be skipped.")
-        df = df.dropna(subset=['Datetime'])
-
-    # Group by person/date
-    grouped = df.groupby(['Person ID', 'Person Name', 'Punch Date'])
-    records = []
-
-    for (person_id, person_name, punch_date), group in grouped:
-        group_sorted = group.sort_values(by='Datetime')
-        check_in = group_sorted.iloc[0]['Datetime']
-        check_out = group_sorted.iloc[-1]['Datetime']
-        hours_worked = round((check_out - check_in).total_seconds() / 3600, 2)
-        records.append({
-            'Person ID': person_id,
-            'Person Name': person_name,
-            'Location': 'Maru',
-            'Date': punch_date,
-            'Start': check_in.strftime("%H:%M:%S"),
-            'End': check_out.strftime("%H:%M:%S"),
-            'Hours': hours_worked,
-            'Details': ''  # placeholder for new column
-        })
-
-    # Organize records per person
-    records_df = pd.DataFrame(records)
+    # Process timeclock CSV
     persons = {}
-    for (person_id, person_name), group in records_df.groupby(['Person ID', 'Person Name']):
-        df_person = group.sort_values(by='Date').reset_index(drop=True)
-        # Insert Details column after Hours
-        cols = list(df_person.columns)
-        if 'Details' in cols:
-            cols.remove('Details')
-            idx = cols.index('Hours') + 1
-            cols.insert(idx, 'Details')
+    if has_timeclock:
+        # Load main timesheet CSV
+        df = pd.read_csv(csv_file)
+        df.columns = [col.strip() for col in df.columns]
+
+        # Combine Punch Date + Time, supporting multiple date formats
+        datetime_str = df['Punch Date'].str.strip() + " " + df['Attendance record'].str.strip()
+
+        # Try parsing with both possible date formats
+        df['Datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
+        mask_failed = df['Datetime'].isna()
+        if mask_failed.any():
+            df.loc[mask_failed, 'Datetime'] = pd.to_datetime(
+                datetime_str[mask_failed], format='%m/%d/%Y %H:%M:%S', errors='coerce'
+            )
+
+        # Drop rows that still couldn't be parsed
+        if df['Datetime'].isna().any():
+            warnings.append("Some datetime entries could not be parsed and will be skipped.")
+            df = df.dropna(subset=['Datetime'])
+
+        # Group by person/date
+        grouped = df.groupby(['Person ID', 'Person Name', 'Punch Date'])
+        records = []
+
+        for (person_id, person_name, punch_date), group in grouped:
+            group_sorted = group.sort_values(by='Datetime')
+            check_in = group_sorted.iloc[0]['Datetime']
+            check_out = group_sorted.iloc[-1]['Datetime']
+            hours_worked = round((check_out - check_in).total_seconds() / 3600, 2)
+            records.append({
+                'Person ID': person_id,
+                'Person Name': person_name,
+                'Location': 'Maru',
+                'Date': punch_date,
+                'Start': check_in.strftime("%H:%M:%S"),
+                'End': check_out.strftime("%H:%M:%S"),
+                'Hours': hours_worked,
+                'Details': ''  # placeholder for new column
+            })
+
+        # Organize records per person
+        records_df = pd.DataFrame(records)
+        for (person_id, person_name), group in records_df.groupby(['Person ID', 'Person Name']):
+            df_person = group.sort_values(by='Date').reset_index(drop=True)
+            # Insert Details column after Hours
+            cols = list(df_person.columns)
+            if 'Details' in cols:
+                cols.remove('Details')
+                idx = cols.index('Hours') + 1
+                cols.insert(idx, 'Details')
+                df_person = df_person[cols]
+            # Reorder columns to have Location first, then Date, then others
+            cols = ['Location', 'Date'] + [col for col in df_person.columns if col not in ['Location', 'Date', 'Person ID', 'Person Name']]
             df_person = df_person[cols]
-        # Reorder columns to have Location first, then Date, then others
-        cols = ['Location', 'Date'] + [col for col in df_person.columns if col not in ['Location', 'Date', 'Person ID', 'Person Name']]
-        df_person = df_person[cols]
-        persons[(person_id, person_name)] = df_person
+            persons[(person_id, person_name)] = df_person
 
     # Load and map turno CSV rows to people/locations
-    turno_df = pd.read_csv(turno_csv)
-    turno_df.columns = [col.strip() for col in turno_df.columns]
-    required_turno_cols = [
-        "Teammate",
-        "Start Date & Time",
-        "End Date & Time",
-        "Cleaning Price",
-        "Property Alias",
-        "Property Group",
-    ]
-    missing_turno_cols = [col for col in required_turno_cols if col not in turno_df.columns]
-    if missing_turno_cols:
-        print(f"Turno file missing columns: {', '.join(missing_turno_cols)}")
-        sys.exit(1)
-
-    turno_df["Start Dt"] = pd.to_datetime(turno_df["Start Date & Time"], errors="coerce")
-    turno_df["End Dt"] = pd.to_datetime(turno_df["End Date & Time"], errors="coerce")
-    turno_df["Cleaning Price"] = pd.to_numeric(turno_df["Cleaning Price"], errors="coerce")
-
-    person_key_map = {}
-    for person_key in persons.keys():
-        first, last1 = name_key(person_key[1])
-        if not first or not last1:
-            continue
-        person_key_map.setdefault((first, last1), []).append(person_key)
-
     turno_events = {}
-    for idx, row in turno_df.iterrows():
-        teammate_val = row.get("Teammate", "")
-        if pd.isna(teammate_val):
-            print(f"Unmatched turno row {idx + 2}: missing teammate name")
-            continue
-        teammate = str(teammate_val).strip()
-        first, last1 = name_key(teammate)
-        if not first or not last1:
-            print(f"Unmatched turno row {idx + 2}: invalid teammate name '{teammate}'")
-            continue
+    if has_turno:
+        turno_df = pd.read_csv(turno_csv)
+        turno_df.columns = [col.strip() for col in turno_df.columns]
 
-        candidates = person_key_map.get((first, last1), [])
-        if len(candidates) == 0:
-            print(f"Unmatched turno row {idx + 2}: teammate '{teammate}' not found in timesheet")
-            continue
-        if len(candidates) > 1:
-            candidate_labels = ", ".join([f"{pid} {pname}" for pid, pname in candidates])
-            print(
-                f"Unmatched turno row {idx + 2}: teammate '{teammate}' matches multiple people ({candidate_labels})"
-            )
-            continue
-
-        start_dt = row["Start Dt"]
-        end_dt = row["End Dt"]
-        rate_val = row["Cleaning Price"]
-        if pd.isna(start_dt) or pd.isna(end_dt):
-            print(f"Unmatched turno row {idx + 2}: missing start/end time for '{teammate}'")
-            continue
-        if pd.isna(rate_val):
-            print(f"Unmatched turno row {idx + 2}: missing cleaning price for '{teammate}'")
-            continue
-
-        property_alias_val = row.get("Property Alias", "")
-        property_group_val = row.get("Property Group", "")
-        property_alias = "" if pd.isna(property_alias_val) else str(property_alias_val).strip()
-        property_group = "" if pd.isna(property_group_val) else str(property_group_val).strip()
-        location = map_turno_location(property_group, property_alias)
-
-        person_key = candidates[0]
-        event = {
-            "date": start_dt.strftime("%m/%d/%Y"),
-            "start": start_dt.strftime("%H:%M:%S"),
-            "end": end_dt.strftime("%H:%M:%S"),
-            "rate": float(rate_val),
-            "details": property_alias,
-            "label": property_alias or "Details here",
-            "start_dt": start_dt,
+        # Normalize column names to expected casing (CSV exports vary)
+        expected_cols = {
+            "Teammate": "Teammate",
+            "Start Date & Time": "Start Date & Time",
+            "End Date & Time": "End Date & Time",
+            "Cleaning Price": "Cleaning Price",
+            "Property Alias": "Property Alias",
+            "Property Group": "Property Group",
         }
-        turno_events.setdefault(
-            person_key, {"Mango Villas": [], "Casa Damisela": [], "Other": []}
-        )
-        turno_events[person_key][location].append(event)
+        col_lower_map = {col.lower(): col for col in turno_df.columns}
+        rename_map = {}
+        for expected in expected_cols:
+            if expected not in turno_df.columns and expected.lower() in col_lower_map:
+                rename_map[col_lower_map[expected.lower()]] = expected
+        if rename_map:
+            turno_df.rename(columns=rename_map, inplace=True)
 
-    for location_groups in turno_events.values():
-        for events in location_groups.values():
-            events.sort(key=lambda item: item["start_dt"])
+        required_turno_cols = list(expected_cols.keys())
+        missing_turno_cols = [col for col in required_turno_cols if col not in turno_df.columns]
+        if missing_turno_cols:
+            raise ValueError(f"Turno file missing columns: {', '.join(missing_turno_cols)}")
+
+        turno_df["Start Dt"] = pd.to_datetime(turno_df["Start Date & Time"], errors="coerce")
+        turno_df["End Dt"] = pd.to_datetime(turno_df["End Date & Time"], errors="coerce")
+        turno_df["Cleaning Price"] = pd.to_numeric(turno_df["Cleaning Price"], errors="coerce").fillna(0)
+
+        # Split pay when multiple people are assigned to the same property on the same date
+        turno_df["Job Date"] = turno_df["Start Dt"].dt.date
+        for (_, _), group in turno_df.groupby(["Property Alias", "Job Date"]):
+            if len(group) > 1:
+                # Use max price as the total project price (each row carries the full price)
+                total_price = group["Cleaning Price"].max()
+                split_price = round(total_price / len(group), 2)
+                turno_df.loc[group.index, "Cleaning Price"] = split_price
+
+        person_key_map = {}
+        for person_key in persons.keys():
+            first, last1 = name_key(person_key[1])
+            if not first or not last1:
+                continue
+            person_key_map.setdefault((first, last1), []).append(person_key)
+
+        for idx, row in turno_df.iterrows():
+            teammate_val = row.get("Teammate", "")
+            if pd.isna(teammate_val):
+                warnings.append(f"Unmatched turno row {idx + 2}: missing teammate name")
+                continue
+            teammate = str(teammate_val).strip()
+            first, last1 = name_key(teammate)
+            if not first or not last1:
+                warnings.append(f"Unmatched turno row {idx + 2}: invalid teammate name '{teammate}'")
+                continue
+
+            candidates = person_key_map.get((first, last1), [])
+            if len(candidates) == 0:
+                if has_timeclock:
+                    warnings.append(f"Unmatched turno row {idx + 2}: teammate '{teammate}' not found in timesheet")
+                    continue
+                else:
+                    # Turno-only mode: create person entry from teammate name
+                    # Try to resolve Person ID from rates CSV by name
+                    resolved_id = rates_by_name.get((first, last1), teammate)
+                    person_key = (resolved_id, teammate)
+                    if person_key not in persons:
+                        persons[person_key] = pd.DataFrame(
+                            columns=['Location', 'Date', 'Start', 'End', 'Hours', 'Details']
+                        )
+                        person_key_map.setdefault((first, last1), []).append(person_key)
+                    candidates = person_key_map[(first, last1)]
+            if len(candidates) > 1:
+                candidate_labels = ", ".join([f"{pid} {pname}" for pid, pname in candidates])
+                warnings.append(
+                    f"Unmatched turno row {idx + 2}: teammate '{teammate}' matches multiple people ({candidate_labels})"
+                )
+                continue
+
+            start_dt = row["Start Dt"]
+            end_dt = row["End Dt"]
+            rate_val = row["Cleaning Price"]
+            if pd.isna(start_dt) or pd.isna(end_dt):
+                warnings.append(f"Unmatched turno row {idx + 2}: missing start/end time for '{teammate}'")
+                continue
+            if pd.isna(rate_val):
+                rate_val = 0
+
+            property_alias_val = row.get("Property Alias", "")
+            property_group_val = row.get("Property Group", "")
+            property_alias = "" if pd.isna(property_alias_val) else str(property_alias_val).strip()
+            property_group = "" if pd.isna(property_group_val) else str(property_group_val).strip()
+            location = map_turno_location(property_group, property_alias)
+
+            person_key = candidates[0]
+            event = {
+                "date": start_dt.strftime("%m/%d/%Y"),
+                "start": start_dt.strftime("%H:%M:%S"),
+                "end": end_dt.strftime("%H:%M:%S"),
+                "rate": float(rate_val),
+                "details": property_alias,
+                "label": property_alias or "Details here",
+                "start_dt": start_dt,
+            }
+            turno_events.setdefault(
+                person_key, {"Mango Villas": [], "Casa Damisela": [], "Other": []}
+            )
+            turno_events[person_key][location].append(event)
+
+        for location_groups in turno_events.values():
+            for events in location_groups.values():
+                events.sort(key=lambda item: item["start_dt"])
 
     # Write to Excel
     with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
@@ -222,7 +281,10 @@ def process_timesheet(csv_file, output_excel, turno_csv):
         summary_entries = []
 
         for (person_id, person_name), df_person in persons.items():
-            sheet_name = f"{person_id} - {person_name}"
+            if str(person_id) == str(person_name):
+                sheet_name = str(person_name)
+            else:
+                sheet_name = f"{person_id} - {person_name}"
             if len(sheet_name) > 31:
                 sheet_name = sheet_name[:31]
 
@@ -233,10 +295,13 @@ def process_timesheet(csv_file, output_excel, turno_csv):
 
             # Header and formatting
             # Write person info row with light green background
-            worksheet.write(0, 0, f"Person ID: {person_id}, Name: {person_name}", light_green_text_format)
+            if str(person_id) == str(person_name):
+                worksheet.write(0, 0, f"Name: {person_name}", light_green_text_format)
+            else:
+                worksheet.write(0, 0, f"Person ID: {person_id}, Name: {person_name}", light_green_text_format)
             worksheet.write(0, 1, '', light_green_text_format)
             # Insert row for timesheet period (parsed from filename)
-            match = re.search(r'(\d{2}-\d{2}-\d{4})', os.path.basename(csv_file))
+            match = re.search(r'(\d{2}-\d{2}-\d{4})', os.path.basename(date_source_file))
             if match:
                 end_date = datetime.strptime(match.group(1), '%m-%d-%Y')
                 start_date = end_date - timedelta(days=6)
@@ -341,7 +406,10 @@ def process_timesheet(csv_file, output_excel, turno_csv):
                 excel_row = row_idx + 1      # Excel row number (1-based)
                 formula = f'=IF(AND(C{excel_row}<>"",D{excel_row}<>""),ROUND((D{excel_row}-C{excel_row})*24,2),"")'
                 worksheet.write_formula(row_idx, hours_col_idx, formula)
-            worksheet.write_formula(total_row_idx, 4, f"=SUM(E{hours_start_excel}:E{hours_end_excel})")
+            if n > 0:
+                worksheet.write_formula(total_row_idx, 4, f"=SUM(E{hours_start_excel}:E{hours_end_excel})")
+            else:
+                worksheet.write_number(total_row_idx, 4, 0)
 
             # Rate (from lookup)
             rate = 0
@@ -425,6 +493,7 @@ def process_timesheet(csv_file, output_excel, turno_csv):
             # Capture summary references
             hours_cell = f"={quote_sheetname(sheet_name)}!E{total_row_idx + 1}"
             total_cell = f"={quote_sheetname(sheet_name)}!E{total_dollar_idx + 1}"
+            withheld_cell = f"={quote_sheetname(sheet_name)}!E{withheld_row_idx + 1}"
             reviewed_cell = f"=IF({quote_sheetname(sheet_name)}!{review_cell}=\"y\",\"y\",\"\")"
 
             sheet_ref = quote_sheetname(sheet_name)
@@ -441,37 +510,48 @@ def process_timesheet(csv_file, output_excel, turno_csv):
             cleans_parts = [main_clean_count, *section_clean_counts]
             cleans_formula = "=" + "+".join(cleans_parts) if cleans_parts else "=0"
 
-            summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell, reviewed_cell))
+            summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell, withheld_cell, reviewed_cell))
 
         # Populate summary sheet
         summary_sheet.write(0, 0, "Person", summary_header_format)
         summary_sheet.write(0, 1, "Total Hours", summary_header_format)
         summary_sheet.write(0, 2, "Total Cleans", summary_header_format)
         summary_sheet.write(0, 3, "Total $", summary_header_format)
-        summary_sheet.write(0, 4, "Reviewed", summary_header_format)
-        for idx, (label, hours_ref, cleans_ref, total_ref, reviewed_ref) in enumerate(summary_entries, start=1):
+        summary_sheet.write(0, 4, "Withheld $", summary_header_format)
+        summary_sheet.write(0, 5, "Reviewed", summary_header_format)
+        for idx, (label, hours_ref, cleans_ref, total_ref, withheld_ref, reviewed_ref) in enumerate(summary_entries, start=1):
             summary_sheet.write(idx, 0, label)
             summary_sheet.write_formula(idx, 1, hours_ref)
             summary_sheet.write_formula(idx, 2, cleans_ref)
             summary_sheet.write_formula(idx, 3, total_ref, currency_format)
-            summary_sheet.write_formula(idx, 4, reviewed_ref)
+            summary_sheet.write_formula(idx, 4, withheld_ref, currency_format)
+            summary_sheet.write_formula(idx, 5, reviewed_ref)
         if summary_entries:
             total_row = len(summary_entries) + 1
             summary_sheet.write(total_row, 0, "All sheets total", summary_header_format)
             summary_sheet.write_formula(total_row, 1, f"=SUM(B2:B{total_row})")
             summary_sheet.write_formula(total_row, 2, f"=SUM(C2:C{total_row})")
             summary_sheet.write_formula(total_row, 3, f"=SUM(D2:D{total_row})", light_green_currency_format)
+            summary_sheet.write_formula(total_row, 4, f"=SUM(E2:E{total_row})", currency_format)
         summary_sheet.set_column('A:A', 35)
-        summary_sheet.set_column('B:E', 18)
+        summary_sheet.set_column('B:F', 18)
 
-    print(f"Excel file '{output_excel}' created successfully.")
+    message = f"Excel file '{output_excel}' created successfully."
+    return message, warnings
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python export-timesheet.py <output_excel> <input_csv> <turno_csv>")
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Usage: python export-timesheet.py <output_excel> <input_csv> [turno_csv]")
         sys.exit(1)
 
     output_excel = sys.argv[1]
     input_csv = sys.argv[2]
-    turno_csv = sys.argv[3]
-    process_timesheet(input_csv, output_excel, turno_csv)
+    turno_csv = sys.argv[3] if len(sys.argv) > 3 else None
+    try:
+        message, warn_list = process_timesheet(input_csv, output_excel, turno_csv)
+        for w in warn_list:
+            print(f"Warning: {w}")
+        print(message)
+    except (FileNotFoundError, ValueError) as e:
+        print(e)
+        sys.exit(1)
