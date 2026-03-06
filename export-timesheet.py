@@ -245,10 +245,14 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
             location = map_turno_location(property_group, property_alias)
 
             person_key = candidates[0]
+            hours_worked = round((end_dt - start_dt).total_seconds() / 3600, 2)
+            if hours_worked < 0.25 or hours_worked > 5:
+                hours_worked = 2.0
             event = {
                 "date": start_dt.strftime("%m/%d/%Y"),
                 "start": start_dt.strftime("%H:%M:%S"),
                 "end": end_dt.strftime("%H:%M:%S"),
+                "hours": hours_worked,
                 "rate": float(rate_val),
                 "details": property_alias,
                 "label": property_alias or "Details here",
@@ -288,10 +292,8 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
             if len(sheet_name) > 31:
                 sheet_name = sheet_name[:31]
 
-            start_row = 3
-            df_person.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row)
-
-            worksheet = writer.sheets[sheet_name]
+            worksheet = workbook.add_worksheet(sheet_name)
+            writer.sheets[sheet_name] = worksheet
 
             # Header and formatting
             # Write person info row with light green background
@@ -308,18 +310,15 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
                 worksheet.write(1, 0, f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
                 worksheet.write_blank(2, 0, None)
             worksheet.set_column('A:D', 20)
-            worksheet.set_column('E:E', 30)  # for Details column
-
-            # Row indices
-            n = len(df_person)
-            total_row_idx        = start_row + n + 1
-            rate_row_idx         = total_row_idx + 1
+            worksheet.set_column('E:E', 10)  # Hours
+            worksheet.set_column('F:F', 12)  # Rate $
+            worksheet.set_column('G:G', 25)  # Details
 
             def write_location_section(start_row, header_title, placeholders=None, data_rows=None):
                 placeholders = placeholders or ["Apt X", "Apt X"]
                 data_rows = data_rows or []
                 worksheet.write(start_row, 0, header_title, header_format)
-                section_headers = ['Date', 'Start', 'End', 'Rate $', 'Details']
+                section_headers = ['Date', 'Start', 'End', 'Hours', 'Rate $', 'Details']
                 for col, name in enumerate(section_headers, start=1):
                     worksheet.write(start_row, col, name, header_format)
 
@@ -336,16 +335,16 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
                         worksheet.write(data_start + offset, 1, row_data.get("date", ""))
                         worksheet.write(data_start + offset, 2, row_data.get("start", ""))
                         worksheet.write(data_start + offset, 3, row_data.get("end", ""))
-                        worksheet.write_number(
-                            data_start + offset, 4, row_data.get("rate", 0), currency_format
-                        )
+                        worksheet.write_number(data_start + offset, 4, row_data.get("hours", 0))
+                        worksheet.write_number(data_start + offset, 5, row_data.get("rate", 0), currency_format)
                     worksheet.write(data_start + offset, 0, label)
 
                 total_row = data_start + row_count
                 first_excel_row = data_start + 1
                 last_excel_row = data_start + row_count
                 worksheet.write(total_row, 0, 'Total $')
-                worksheet.write_formula(total_row, 4, f"=SUM(E{first_excel_row}:E{last_excel_row})", currency_format)
+                worksheet.write_formula(total_row, 4, f"=SUM(E{first_excel_row}:E{last_excel_row})")
+                worksheet.write_formula(total_row, 5, f"=SUM(F{first_excel_row}:F{last_excel_row})", currency_format)
                 return {
                     "total_row": total_row,
                     "next_start": total_row + 2,
@@ -355,8 +354,9 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
 
             person_turno = turno_events.get((person_id, person_name), {})
 
-            current_section_row = rate_row_idx + 4
+            current_section_row = 3
             section_totals_excel_rows = []
+            section_hours_excel_rows = []
             section_definitions = [
                 ("Mango Villas", ["Apt X", "Apt X"]),
                 ("Casa Damisela", ["Apt X", "Apt X"]),
@@ -369,60 +369,38 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
                     current_section_row, section_header, placeholders, data_rows
                 )
                 section_totals_excel_rows.append(section_info["total_row"] + 1)
+                section_hours_excel_rows.append(section_info["total_row"] + 1)
                 section_clean_ranges.append(
                     (section_info["data_start_excel"], section_info["data_end_excel"])
                 )
                 current_section_row = section_info["next_start"]
+
+            section_hours_refs = [f"E{r}" for r in section_hours_excel_rows]
 
             # Summary header directly after the location sections
             summary_header_row = current_section_row
             worksheet.write(summary_header_row, 0, "Summary", summary_header_format)
             worksheet.merge_range(summary_header_row, 0, summary_header_row, 5, "Summary", summary_header_format)
 
-            extras_row_idx = summary_header_row + 1
+            total_hours_block_row = summary_header_row + 1
+            worksheet.write(total_hours_block_row, 0, "Total Hours")
+            hours_formula = "=" + "+".join(section_hours_refs) if section_hours_refs else "=0"
+            worksheet.write_formula(total_hours_block_row, 4, hours_formula)
+
+            extras_row_idx = summary_header_row + 2
             subtotal_row_idx = extras_row_idx + 1
             worksheet.write(subtotal_row_idx, 0, "Subtotal $")
 
-            # Define Excel row numbers (1-based)
-            rate_excel_row = rate_row_idx + 1
-            total_excel_row = total_row_idx + 1
             extras_excel_row = extras_row_idx + 1
 
-            # Add new Total $ row immediately below Rate $
-            total_rate_row_idx = rate_row_idx + 1
-            worksheet.write(rate_row_idx, 0, "Rate $")
-            worksheet.write_number(rate_row_idx, 4, 0, currency_format)  # placeholder, will overwrite below
-            worksheet.write(total_rate_row_idx, 0, "Total $")
-            worksheet.write_formula(total_rate_row_idx, 4, f"=E{rate_row_idx+1} * E{total_row_idx+1}", currency_format)
-
-            # Total hours
-            worksheet.write(total_row_idx, 0, "Total hours")
-            hours_start_excel = start_row + 2
-            hours_end_excel = start_row + n + 1 if n > 0 else hours_start_excel
-            # Per-row Hours formula so added rows recalc automatically
-            hours_col_idx = 4
-            for i in range(n):
-                row_idx = start_row + 1 + i  # zero-based worksheet row
-                excel_row = row_idx + 1      # Excel row number (1-based)
-                formula = f'=IF(AND(C{excel_row}<>"",D{excel_row}<>""),ROUND((D{excel_row}-C{excel_row})*24,2),"")'
-                worksheet.write_formula(row_idx, hours_col_idx, formula)
-            if n > 0:
-                worksheet.write_formula(total_row_idx, 4, f"=SUM(E{hours_start_excel}:E{hours_end_excel})")
-            else:
-                worksheet.write_number(total_row_idx, 4, 0)
-
-            # Rate (from lookup)
-            rate = 0
+            # Rates lookup (for extras/withholding)
             start_date = None
             extra_val = 0
             details_val = ''
             if person_id in rates_dict:
-                rate = float(rates_dict[person_id]['RATE'])
                 start_date = rates_dict[person_id]['START']
                 extra_val = rates_dict[person_id]['EXTRA']
                 details_val = str(rates_dict[person_id]['DETAILS']) if pd.notna(rates_dict[person_id]['DETAILS']) else ""
-
-            worksheet.write_number(rate_row_idx, 4, rate, currency_format)
 
             # Extras and Annual withheld exclusion
             worksheet.write(extras_row_idx, 0, "Extras $")
@@ -484,31 +462,23 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
                 "input_message": "Choose 'y' once this sheet is reviewed.",
             })
 
-            # Update subtotal formula to reference new Total $ row
-            section_total_refs = [f"E{row}" for row in section_totals_excel_rows]
-            subtotal_parts = [f"E{total_rate_row_idx+1}", *section_total_refs, f"E{extras_excel_row}"]
+            # Subtotal: section totals + extras
+            section_total_refs = [f"F{row}" for row in section_totals_excel_rows]
+            subtotal_parts = [*section_total_refs, f"E{extras_excel_row}"]
             subtotal_formula = "=" + " + ".join(subtotal_parts)
             worksheet.write_formula(subtotal_row_idx, 4, subtotal_formula, currency_format)
 
             # Capture summary references
-            hours_cell = f"={quote_sheetname(sheet_name)}!E{total_row_idx + 1}"
+            hours_cell = f"={quote_sheetname(sheet_name)}!E{total_hours_block_row + 1}"
             total_cell = f"={quote_sheetname(sheet_name)}!E{total_dollar_idx + 1}"
             withheld_cell = f"={quote_sheetname(sheet_name)}!E{withheld_row_idx + 1}"
             reviewed_cell = f"=IF({quote_sheetname(sheet_name)}!{review_cell}=\"y\",\"y\",\"\")"
 
             sheet_ref = quote_sheetname(sheet_name)
-            if n > 0:
-                main_start_excel = start_row + 2
-                main_end_excel = start_row + n + 1
-                main_clean_count = f"COUNTA({sheet_ref}!B{main_start_excel}:B{main_end_excel})"
-            else:
-                main_clean_count = "0"
-
             section_clean_counts = [
-                f'COUNTIF({sheet_ref}!E{start}:E{end},"<>")' for start, end in section_clean_ranges
+                f'COUNTIF({sheet_ref}!F{start}:F{end},"<>")' for start, end in section_clean_ranges
             ]
-            cleans_parts = [main_clean_count, *section_clean_counts]
-            cleans_formula = "=" + "+".join(cleans_parts) if cleans_parts else "=0"
+            cleans_formula = "=" + "+".join(section_clean_counts) if section_clean_counts else "=0"
 
             summary_entries.append((sheet_name, hours_cell, cleans_formula, total_cell, withheld_cell, reviewed_cell))
 
@@ -518,14 +488,19 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
         summary_sheet.write(0, 2, "Total Cleans", summary_header_format)
         summary_sheet.write(0, 3, "Total $", summary_header_format)
         summary_sheet.write(0, 4, "Withheld $", summary_header_format)
-        summary_sheet.write(0, 5, "Reviewed", summary_header_format)
+        summary_sheet.write(0, 5, "Pay/Hour", summary_header_format)
+        summary_sheet.write(0, 6, "Pay/Job", summary_header_format)
+        summary_sheet.write(0, 7, "Reviewed", summary_header_format)
         for idx, (label, hours_ref, cleans_ref, total_ref, withheld_ref, reviewed_ref) in enumerate(summary_entries, start=1):
+            excel_row = idx + 1
             summary_sheet.write(idx, 0, label)
             summary_sheet.write_formula(idx, 1, hours_ref)
             summary_sheet.write_formula(idx, 2, cleans_ref)
             summary_sheet.write_formula(idx, 3, total_ref, currency_format)
             summary_sheet.write_formula(idx, 4, withheld_ref, currency_format)
-            summary_sheet.write_formula(idx, 5, reviewed_ref)
+            summary_sheet.write_formula(idx, 5, f'=IFERROR(D{excel_row}/B{excel_row},"")', currency_format)
+            summary_sheet.write_formula(idx, 6, f'=IFERROR(D{excel_row}/C{excel_row},"")', currency_format)
+            summary_sheet.write_formula(idx, 7, reviewed_ref)
         if summary_entries:
             total_row = len(summary_entries) + 1
             summary_sheet.write(total_row, 0, "All sheets total", summary_header_format)
@@ -533,8 +508,17 @@ def process_timesheet(csv_file, output_excel, turno_csv, rates_csv=None):
             summary_sheet.write_formula(total_row, 2, f"=SUM(C2:C{total_row})")
             summary_sheet.write_formula(total_row, 3, f"=SUM(D2:D{total_row})", light_green_currency_format)
             summary_sheet.write_formula(total_row, 4, f"=SUM(E2:E{total_row})", currency_format)
-        summary_sheet.set_column('A:A', 35)
-        summary_sheet.set_column('B:F', 18)
+        # Set each column to the minimum width needed to display its content without wrapping
+        all_labels = ([label for label, *_ in summary_entries] + ["All sheets total"]) if summary_entries else ["All sheets total"]
+        col_a_width = max(len(s) for s in all_labels) + 2
+        summary_sheet.set_column(0, 0, col_a_width)
+        summary_sheet.set_column(1, 1, 13)   # Total Hours
+        summary_sheet.set_column(2, 2, 14)   # Total Cleans
+        summary_sheet.set_column(3, 3, 12)   # Total $
+        summary_sheet.set_column(4, 4, 12)   # Withheld $
+        summary_sheet.set_column(5, 5, 12)   # Pay/Hour
+        summary_sheet.set_column(6, 6, 11)   # Pay/Job
+        summary_sheet.set_column(7, 7, 10)   # Reviewed
 
     message = f"Excel file '{output_excel}' created successfully."
     return message, warnings

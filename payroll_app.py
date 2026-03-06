@@ -5,13 +5,16 @@ Provides file pickers for the timeclock CSV, turno CSV, and output Excel file,
 then runs the export-timesheet process and displays results.
 """
 
+import calendar
 import importlib
+import json
 import os
 import re
 import sys
 import threading
 import subprocess
 import tkinter as tk
+from datetime import date, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,34 @@ process_timesheet = export_mod.process_timesheet
 # Helpers
 # ---------------------------------------------------------------------------
 
+DAYS_OF_WEEK = list(calendar.day_name)  # ['Monday', ..., 'Sunday']
+_CONFIG_FILE = os.path.expanduser("~/.optihome_payroll_config.json")
+
+
+def _load_config():
+    try:
+        with open(_CONFIG_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_config(data):
+    try:
+        with open(_CONFIG_FILE, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+def _get_period_end_date(day_name):
+    """Most recent date (including today) that falls on day_name."""
+    target_wd = DAYS_OF_WEEK.index(day_name)
+    today = date.today()
+    days_back = (today.weekday() - target_wd) % 7
+    return today - timedelta(days=days_back)
+
+
 def _shorten_path(path, segments=3):
     """Return the last *segments* components of a path, prefixed with /."""
     if not path:
@@ -112,7 +143,11 @@ class PayrollApp(tk.Tk):
         self._output_path = ""
         self._rates_path = os.path.join(self._project_dir, "timesheet-rates.csv")
 
+        config = _load_config()
+        self._end_day_var = tk.StringVar(value=config.get("end_day", "Wednesday"))
+
         self._build_ui()
+        self._auto_load_paths()
         self._center_window()
 
     # ---- layout -----------------------------------------------------------
@@ -123,6 +158,24 @@ class PayrollApp(tk.Tk):
         muted_font = ("Helvetica", 10)
 
         row = 0
+
+        # --- Period End Day ---
+        day_frame = tk.Frame(self)
+        day_frame.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
+        tk.Label(day_frame, text="Period end day:").pack(side="left")
+        day_combo = ttk.Combobox(
+            day_frame, textvariable=self._end_day_var,
+            values=DAYS_OF_WEEK, width=12, state="readonly",
+        )
+        day_combo.pack(side="left", padx=(6, 16))
+        self._end_date_label = tk.Label(day_frame, text="", fg="#2e7d32")
+        self._end_date_label.pack(side="left")
+        day_combo.bind("<<ComboboxSelected>>", lambda e: self._on_day_changed())
+        self._refresh_end_date()
+        row += 1
+
+        tk.Frame(self, height=4).grid(row=row, column=0, columnspan=2)
+        row += 1
 
         # --- Timeclock CSV ---
         tk.Label(self, text="Timeclock CSV (_time.csv)  \u2014  optional:", anchor="w").grid(
@@ -252,6 +305,19 @@ class PayrollApp(tk.Tk):
         self._status.tag_configure("warning", foreground="#e65100")
         self._status.tag_configure("error", foreground="#c62828")
 
+    def _refresh_end_date(self):
+        """Update the end date label from the current day selection."""
+        day = self._end_day_var.get()
+        end_date = _get_period_end_date(day)
+        self._end_date_label.config(
+            text=f"→  {end_date.strftime('%A, %B %d, %Y')}  ({end_date.strftime('%m-%d-%Y')})"
+        )
+
+    def _on_day_changed(self):
+        self._refresh_end_date()
+        _save_config({**_load_config(), "end_day": self._end_day_var.get()})
+        self._auto_load_paths()
+
     def _center_window(self):
         self.update_idletasks()
         w = self.winfo_reqwidth()
@@ -260,68 +326,97 @@ class PayrollApp(tk.Tk):
         y = (self.winfo_screenheight() - h) // 3
         self.geometry(f"+{x}+{y}")
 
+    # ---- path helpers -----------------------------------------------------
+
+    def _set_time_path(self, path):
+        self._time_path = path
+        self._time_display.set(_shorten_path(path) if path else "")
+        self._time_full_label.config(text=path)
+        self._time_clear_btn.config(state="normal" if path else "disabled")
+
+    def _set_turno_path(self, path):
+        self._turno_path = path
+        self._turno_display.set(_shorten_path(path) if path else "")
+        self._turno_full_label.config(text=path)
+        self._turno_clear_btn.config(state="normal" if path else "disabled")
+
+    def _set_output_path(self, path):
+        self._output_path = path
+        self._output_display.set(_shorten_path(path) if path else "")
+        self._output_full_label.config(text=path)
+        self._output_clear_btn.config(state="normal" if path else "disabled")
+
+    def _auto_load_paths(self):
+        """Auto-select input/output files matching the current period end date."""
+        config = _load_config()
+        end_date = _get_period_end_date(self._end_day_var.get())
+        date_str = end_date.strftime("%m-%d-%Y")
+
+        time_dir = config.get("last_time_dir", self._raw_dir)
+        turno_dir = config.get("last_turno_dir", self._raw_dir)
+        output_dir = config.get("last_output_dir", self._timesheets_dir)
+
+        time_candidate = os.path.join(time_dir, f"{date_str}_time.csv")
+        self._set_time_path(time_candidate if os.path.isfile(time_candidate) else "")
+
+        turno_candidate = os.path.join(turno_dir, f"{date_str}_turno.csv")
+        self._set_turno_path(turno_candidate if os.path.isfile(turno_candidate) else "")
+
+        output_candidate = os.path.join(output_dir, f"{date_str}.xlsx")
+        self._set_output_path(output_candidate)
+
     # ---- file dialogs -----------------------------------------------------
 
     def _browse_time(self):
+        config = _load_config()
+        initial_dir = config.get("last_time_dir", self._raw_dir)
         path = filedialog.askopenfilename(
             title="Select Timeclock CSV",
-            initialdir=self._raw_dir,
+            initialdir=initial_dir,
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
         if path:
-            self._time_path = path
-            self._time_display.set(_shorten_path(path))
-            self._time_full_label.config(text=path)
-            self._time_clear_btn.config(state="normal")
+            _save_config({**config, "last_time_dir": os.path.dirname(path)})
+            self._set_time_path(path)
             self._suggest_output(path)
 
     def _clear_time(self):
-        self._time_path = ""
-        self._time_display.set("")
-        self._time_full_label.config(text="")
-        self._time_clear_btn.config(state="disabled")
+        self._set_time_path("")
 
     def _browse_turno(self):
+        config = _load_config()
+        initial_dir = config.get("last_turno_dir", self._raw_dir)
         path = filedialog.askopenfilename(
             title="Select Turno CSV",
-            initialdir=self._raw_dir,
+            initialdir=initial_dir,
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
         if path:
-            self._turno_path = path
-            self._turno_display.set(_shorten_path(path))
-            self._turno_full_label.config(text=path)
-            self._turno_clear_btn.config(state="normal")
-            # Suggest output if not already set
+            _save_config({**config, "last_turno_dir": os.path.dirname(path)})
+            self._set_turno_path(path)
             if not self._output_path:
                 self._suggest_output(path)
 
     def _clear_turno(self):
-        self._turno_path = ""
-        self._turno_display.set("")
-        self._turno_full_label.config(text="")
-        self._turno_clear_btn.config(state="disabled")
+        self._set_turno_path("")
 
     def _browse_output(self):
+        config = _load_config()
+        initial_dir = config.get("last_output_dir", self._timesheets_dir)
         initial_name = self._suggested_output_name() or "output.xlsx"
         path = filedialog.asksaveasfilename(
             title="Save Excel Output As",
-            initialdir=self._timesheets_dir,
+            initialdir=initial_dir,
             initialfile=initial_name,
             defaultextension=".xlsx",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
         )
         if path:
-            self._output_path = path
-            self._output_display.set(_shorten_path(path))
-            self._output_full_label.config(text=path)
-            self._output_clear_btn.config(state="normal")
+            _save_config({**config, "last_output_dir": os.path.dirname(path)})
+            self._set_output_path(path)
 
     def _clear_output(self):
-        self._output_path = ""
-        self._output_display.set("")
-        self._output_full_label.config(text="")
-        self._output_clear_btn.config(state="disabled")
+        self._set_output_path("")
 
     def _suggested_output_name(self):
         """Derive an output filename from whichever input CSV is set."""
@@ -340,10 +435,9 @@ class PayrollApp(tk.Tk):
         basename = os.path.basename(source_path)
         match = re.search(r"(\d{2}-\d{2}-\d{4})", basename)
         if match:
-            path = os.path.join(self._timesheets_dir, f"{match.group(1)}.xlsx")
-            self._output_path = path
-            self._output_display.set(_shorten_path(path))
-            self._output_full_label.config(text=path)
+            output_dir = _load_config().get("last_output_dir", self._timesheets_dir)
+            path = os.path.join(output_dir, f"{match.group(1)}.xlsx")
+            self._set_output_path(path)
 
     # ---- rates CSV --------------------------------------------------------
 
