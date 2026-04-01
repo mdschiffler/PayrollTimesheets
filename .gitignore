@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 
 # Virtual environment
-venv/
+_dev/venv/
 
 # OS / editor noise
 .DS_Store
@@ -15,6 +15,6 @@ Timesheets/
 Quarterly Cleaning Expenses/
 
 # PyInstaller build artifacts
-build/
+_dev/build/
 dist/
 *.spec

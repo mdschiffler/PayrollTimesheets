@@ -35,22 +35,18 @@ def _get_script_dir():
 def _get_project_dir():
     """Best-effort guess at the project root (contains Raw/, Timesheets/, timesheet-rates.csv).
 
-    Non-frozen: directory of this .py file.
-    Frozen (.app): walk upward from the .app bundle looking for timesheet-rates.csv.
-    Falls back to the directory that contains the .app bundle.
+    Walks upward from the script location (or .app bundle) looking for timesheet-rates.csv.
     """
     if not getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(__file__))
+        start = os.path.dirname(os.path.abspath(__file__))
+    else:
+        # sys.executable is …/Foo.app/Contents/MacOS/Foo
+        app_dir = os.path.dirname(sys.executable)      # Contents/MacOS
+        app_dir = os.path.dirname(app_dir)             # Contents
+        app_dir = os.path.dirname(app_dir)             # Foo.app
+        start = os.path.dirname(app_dir)               # dir containing .app
 
-    # sys.executable is …/Foo.app/Contents/MacOS/Foo
-    # Go up to the directory containing the .app bundle
-    app_dir = os.path.dirname(sys.executable)          # Contents/MacOS
-    app_dir = os.path.dirname(app_dir)                 # Contents
-    app_dir = os.path.dirname(app_dir)                 # Foo.app
-    bundle_parent = os.path.dirname(app_dir)           # dir containing .app
-
-    # Search upward (up to 3 levels) for timesheet-rates.csv
-    candidate = bundle_parent
+    candidate = start
     for _ in range(4):
         if os.path.isfile(os.path.join(candidate, "timesheet-rates.csv")):
             return candidate
@@ -59,7 +55,7 @@ def _get_project_dir():
             break
         candidate = parent
 
-    return bundle_parent
+    return start
 
 def _import_export_module():
     """Import export-timesheet.py (hyphenated name requires importlib)."""
@@ -159,9 +155,30 @@ class PayrollApp(tk.Tk):
 
         row = 0
 
+        # --- Header banner ---
+        header = tk.Frame(self, bg="#2e7d32", padx=16, pady=12)
+        header.grid(row=row, column=0, columnspan=2, sticky="we")
+        tk.Label(
+            header, text="Optihome Payroll", font=("Helvetica", 18, "bold"),
+            fg="white", bg="#2e7d32",
+        ).pack(anchor="w")
+        steps = tk.Frame(header, bg="#2e7d32")
+        steps.pack(anchor="w", pady=(6, 0))
+        for i, step in enumerate([
+            "Verify the period end date",
+            "Select the turno report",
+            "Click Run Export",
+            "(Optional) Adjust Advanced Settings",
+        ], 1):
+            tk.Label(
+                steps, text=f"{i}. {step}", font=("Helvetica", 11),
+                fg="#c8e6c9", bg="#2e7d32", anchor="w",
+            ).pack(anchor="w")
+        row += 1
+
         # --- Period End Day ---
         day_frame = tk.Frame(self)
-        day_frame.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
+        day_frame.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 4))
         tk.Label(day_frame, text="Period end day:").pack(side="left")
         day_combo = ttk.Combobox(
             day_frame, textvariable=self._end_day_var,
@@ -177,33 +194,8 @@ class PayrollApp(tk.Tk):
         tk.Frame(self, height=4).grid(row=row, column=0, columnspan=2)
         row += 1
 
-        # --- Timeclock CSV ---
-        tk.Label(self, text="Timeclock CSV (_time.csv)  \u2014  optional:", anchor="w").grid(
-            row=row, column=0, columnspan=2, sticky="w", **pad
-        )
-        row += 1
-        self._time_display = tk.StringVar()
-        tk.Entry(self, textvariable=self._time_display, width=52,
-                 state="readonly", readonlybackground="white", fg="black").grid(
-            row=row, column=0, sticky="we", padx=(12, 4), pady=2
-        )
-        time_btn_frame = tk.Frame(self)
-        time_btn_frame.grid(row=row, column=1, padx=(0, 12), pady=2)
-        tk.Button(time_btn_frame, text="Browse\u2026", width=10, command=self._browse_time).pack(
-            side="left", padx=(0, 2)
-        )
-        self._time_clear_btn = tk.Button(time_btn_frame, text="\u2715", width=2, command=self._clear_time, state="disabled")
-        self._time_clear_btn.pack(side="left")
-        row += 1
-        self._time_full_label = tk.Label(
-            self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
-        )
-        self._time_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
-
-        row += 1
-
-        # --- Turno CSV ---
-        tk.Label(self, text="Turno CSV (_turno.csv)  \u2014  optional:", anchor="w").grid(
+        # --- Turno CSV (primary input) ---
+        tk.Label(self, text="Turno Report:", anchor="w").grid(
             row=row, column=0, columnspan=2, sticky="w", **pad
         )
         row += 1
@@ -224,11 +216,10 @@ class PayrollApp(tk.Tk):
             self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
         )
         self._turno_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
-
         row += 1
 
         # --- Output Excel ---
-        tk.Label(self, text="Output Excel file (.xlsx):", anchor="w").grid(
+        tk.Label(self, text="Output File:", anchor="w").grid(
             row=row, column=0, columnspan=2, sticky="w", **pad
         )
         row += 1
@@ -249,34 +240,6 @@ class PayrollApp(tk.Tk):
             self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
         )
         self._output_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
-
-        row += 1
-
-        # --- Employee Rates CSV ---
-        tk.Label(self, text="Employee Rates CSV (timesheet-rates.csv):", anchor="w").grid(
-            row=row, column=0, columnspan=2, sticky="w", **pad
-        )
-        row += 1
-        self._rates_display = tk.StringVar(value=_shorten_path(self._rates_path))
-        tk.Entry(self, textvariable=self._rates_display, width=52,
-                 state="readonly", readonlybackground="white", fg="black").grid(
-            row=row, column=0, sticky="we", padx=(12, 4), pady=2
-        )
-        rates_btn_frame = tk.Frame(self)
-        rates_btn_frame.grid(row=row, column=1, padx=(0, 12), pady=2)
-        tk.Button(rates_btn_frame, text="Browse\u2026", width=10, command=self._browse_rates).pack(
-            side="top", pady=(0, 2)
-        )
-        tk.Button(rates_btn_frame, text="Open", width=10, command=self._open_rates_csv).pack(
-            side="top"
-        )
-        row += 1
-        self._rates_full_label = tk.Label(
-            self, text=self._rates_path, anchor="w", fg=muted_fg, font=muted_font,
-            wraplength=420, justify="left"
-        )
-        self._rates_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
-
         row += 1
 
         # --- Run button ---
@@ -284,7 +247,23 @@ class PayrollApp(tk.Tk):
             self, text="Run Export", command=self._run_export,
         )
         self._run_btn.grid(row=row, column=0, columnspan=2, pady=(12, 4), ipady=4)
+        row += 1
 
+        # --- Advanced Settings (collapsed) ---
+        self._advanced_visible = False
+        self._advanced_btn = tk.Button(
+            self, text="\u25b6  Advanced Settings", command=self._toggle_advanced,
+            relief="flat", anchor="w", fg="#555555", font=("Helvetica", 11),
+            activeforeground="#333333",
+        )
+        self._advanced_btn.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0))
+        row += 1
+
+        self._advanced_frame = tk.Frame(self, padx=8, pady=8)
+        self._advanced_row = row
+        self._advanced_frame.grid(row=row, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 4))
+        self._build_advanced_section()
+        self._advanced_frame.grid_remove()
         row += 1
 
         # --- Status area ---
@@ -304,6 +283,74 @@ class PayrollApp(tk.Tk):
         self._status.tag_configure("success", foreground="#2e7d32")
         self._status.tag_configure("warning", foreground="#e65100")
         self._status.tag_configure("error", foreground="#c62828")
+
+    def _build_advanced_section(self):
+        """Build the Timeclock and Employee Rates fields inside the advanced frame."""
+        f = self._advanced_frame
+        muted_fg = "#888888"
+        muted_font = ("Helvetica", 10)
+
+        arow = 0
+
+        # --- Timeclock CSV ---
+        tk.Label(f, text="Timeclock File (optional):", anchor="w").grid(
+            row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2)
+        )
+        arow += 1
+        self._time_display = tk.StringVar()
+        tk.Entry(f, textvariable=self._time_display, width=48,
+                 state="readonly", readonlybackground="white", fg="black").grid(
+            row=arow, column=0, sticky="we", padx=(0, 4), pady=2
+        )
+        time_btn_frame = tk.Frame(f)
+        time_btn_frame.grid(row=arow, column=1, padx=(0, 0), pady=2)
+        tk.Button(time_btn_frame, text="Browse\u2026", width=10, command=self._browse_time).pack(
+            side="left", padx=(0, 2)
+        )
+        self._time_clear_btn = tk.Button(time_btn_frame, text="\u2715", width=2, command=self._clear_time, state="disabled")
+        self._time_clear_btn.pack(side="left")
+        arow += 1
+        self._time_full_label = tk.Label(
+            f, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=400, justify="left"
+        )
+        self._time_full_label.grid(row=arow, column=0, columnspan=2, sticky="w", padx=2, pady=(0, 6))
+        arow += 1
+
+        # --- Employee Rates CSV ---
+        tk.Label(f, text="Employee Rates:", anchor="w").grid(
+            row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2)
+        )
+        arow += 1
+        self._rates_display = tk.StringVar(value=_shorten_path(self._rates_path))
+        tk.Entry(f, textvariable=self._rates_display, width=48,
+                 state="readonly", readonlybackground="white", fg="black").grid(
+            row=arow, column=0, sticky="we", padx=(0, 4), pady=2
+        )
+        rates_btn_frame = tk.Frame(f)
+        rates_btn_frame.grid(row=arow, column=1, padx=(0, 0), pady=2)
+        tk.Button(rates_btn_frame, text="Browse\u2026", width=10, command=self._browse_rates).pack(
+            side="top", pady=(0, 2)
+        )
+        tk.Button(rates_btn_frame, text="Open", width=10, command=self._open_rates_csv).pack(
+            side="top"
+        )
+        arow += 1
+        self._rates_full_label = tk.Label(
+            f, text=self._rates_path, anchor="w", fg=muted_fg, font=muted_font,
+            wraplength=400, justify="left"
+        )
+        self._rates_full_label.grid(row=arow, column=0, columnspan=2, sticky="w", padx=2, pady=(0, 2))
+
+    def _toggle_advanced(self):
+        self._advanced_visible = not self._advanced_visible
+        if self._advanced_visible:
+            self._advanced_frame.grid()
+            self._advanced_btn.config(text="\u25bc  Advanced Settings")
+        else:
+            self._advanced_frame.grid_remove()
+            self._advanced_btn.config(text="\u25b6  Advanced Settings")
+        self.geometry("")
+        self._center_window()
 
     def _refresh_end_date(self):
         """Update the end date label from the current day selection."""

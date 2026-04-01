@@ -6,17 +6,17 @@ Consolidates timesheet data from two CSV sources (timeclock punch records + clea
 
 ## Architecture
 
-Single Python script (`export-timesheet.py`) with no framework. Takes 3 CLI args:
+Single Python script (`_dev/export-timesheet.py`) with no framework. Takes 3 CLI args:
 
 ```
-python export-timesheet.py <output.xlsx> <time_input.csv> <turno_input.csv>
+python _dev/export-timesheet.py <output.xlsx> <time_input.csv> <turno_input.csv>
 ```
 
 ### Data Flow
 
 ```
 Raw/*_time.csv  (timeclock punches)  ─┐
-Raw/*_turno.csv (cleaning job data)  ─┼─► export-timesheet.py ─► Timesheets/*.xlsx
+Raw/*_turno.csv (cleaning job data)  ─┼─► _dev/export-timesheet.py ─► Timesheets/*.xlsx
 timesheet-rates.csv (employee rates) ─┘
 ```
 
@@ -51,49 +51,56 @@ timesheet-rates.csv (employee rates) ─┘
 - Python 3.9+
 - `pandas` — CSV parsing and data manipulation
 - `xlsxwriter` — Excel workbook generation (via `pd.ExcelWriter`)
-- Virtual environment in `venv/`
+- Virtual environment in `_dev/venv/`
 
 ## File Structure
 
 ```
-export-timesheet.py       # Core processing logic (importable + CLI entry point)
-payroll_app.py            # Tkinter GUI application (wraps export-timesheet.py)
-build_app.sh              # Builds a macOS .app bundle via PyInstaller
-timesheet-rates.csv       # Employee rate/bonus lookup (ID,RATE,START,EXTRA,DETAILS)
-README.md                 # User-facing usage instructions
-OLD_export_timesheet.py   # Legacy version (no turno support, reference only)
-Raw/                      # Input CSVs (gitignored)
-Timesheets/               # Output Excel files (gitignored)
-venv/                     # Python virtual environment (gitignored)
+timesheet-rates.csv                # Employee rate/bonus lookup (ID,RATE,START,EXTRA,DETAILS)
+README.md                          # User-facing usage instructions
+Raw/                               # Input CSVs (gitignored)
+Timesheets/                        # Output Excel files (gitignored)
+dist/                              # Built .app bundle (gitignored)
+_dev/
+  export-timesheet.py              # Core processing logic (importable + CLI entry point)
+  payroll_app.py                   # Tkinter GUI application (wraps export-timesheet.py)
+  build_app.sh                     # Builds a macOS .app bundle via PyInstaller
+  CLAUDE.md                        # This file (developer documentation)
+  OLD_export_timesheet.py          # Legacy version (no turno support, reference only)
+  venv/                            # Python virtual environment (gitignored)
+  build/                           # PyInstaller build artifacts (gitignored)
 ```
 
 ## Development Commands
 
 ```bash
 # Activate virtual environment
-source venv/bin/activate
+source _dev/venv/bin/activate
 
 # Run the export (CLI)
-python export-timesheet.py Timesheets/MM-DD-YYYY.xlsx Raw/MM-DD-YYYY_time.csv Raw/MM-DD-YYYY_turno.csv
+python _dev/export-timesheet.py Timesheets/MM-DD-YYYY.xlsx Raw/MM-DD-YYYY_time.csv Raw/MM-DD-YYYY_turno.csv
 
-# Run the GUI
-python payroll_app.py
+# Run the GUI (development mode)
+python _dev/payroll_app.py
 
 # Install dependencies (if setting up fresh)
 pip install pandas xlsxwriter
 
 # Build the macOS .app bundle (requires pyinstaller)
-bash build_app.sh
-# Output: dist/AA Payroll Exporter.app
+bash _dev/build_app.sh
+# Output: dist/Optihome Payroll Processing.app + Finder alias at project root
 ```
 
-## GUI Application (`payroll_app.py`)
+## GUI Application (`_dev/payroll_app.py`)
 
 Tkinter desktop app for non-technical users. Provides:
 
-- File picker for the Timeclock CSV (`_time.csv`)
-- File picker for the Turno CSV (`_turno.csv`)
-- Save-as dialog for the output Excel file (auto-suggests filename from date in timeclock filename)
+- Green branded header with title and instructions
+- File picker for the Turno CSV (`_turno.csv`) as primary input
+- Save-as dialog for the output Excel file (auto-suggests filename from date)
+- Collapsible "Advanced Settings" section containing:
+  - File picker for the Timeclock CSV (`_time.csv`)
+  - File picker for the Employee Rates CSV with Browse/Open
 - "Run Export" button that calls `process_timesheet()` in a background thread
 - Status area showing success, warnings, and errors with colour coding
 - Default browse directories: `Raw/` for inputs, `Timesheets/` for output
@@ -102,7 +109,9 @@ The GUI imports `process_timesheet()` from `export-timesheet.py` via `importlib`
 
 ### Building the .app Bundle
 
-Run `bash build_app.sh` to produce `dist/AA Payroll Exporter.app`. This uses PyInstaller to bundle Python, dependencies, and the processing script into a standalone macOS app that can be double-clicked from Finder. The `timesheet-rates.csv` is bundled but also checked for at runtime next to the app, so it can be updated without rebuilding.
+Run `bash _dev/build_app.sh` to produce `dist/Optihome Payroll Processing.app`. This uses PyInstaller to bundle Python, dependencies, and the processing script into a standalone macOS app. The build also creates a Finder alias at the project root so the user can double-click the app without navigating into `dist/`.
+
+The `timesheet-rates.csv` is bundled but also checked for at runtime next to the app, so it can be updated without rebuilding.
 
 ## Conventions
 
