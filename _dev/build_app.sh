@@ -42,6 +42,7 @@ pyinstaller \
     --onedir \
     --windowed \
     --name "$APP_NAME" \
+    --icon _dev/AppIcon.icns \
     --workpath _dev/build \
     --distpath dist \
     --add-data "_dev/export-timesheet.py:." \
