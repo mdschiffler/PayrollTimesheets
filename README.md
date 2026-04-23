@@ -1,29 +1,46 @@
 # Optihome Payroll Processing
 
-Converts turno and timeclock CSVs into per-employee Excel workbooks with hourly totals, cleaning job details, and a summary sheet.
+Desktop app and command-line exporter for turning payroll CSV reports into a reviewable Excel workbook.
 
-## How to use
+The workbook has a Summary sheet plus one sheet per worker. It supports hourly work from Notion or the timeclock, cleaning jobs from Turno, recurring extras from `timesheet-rates.csv`, and withholding review fields.
+
+## How to use the app
 
 1. Double-click **Optihome Payroll Processing.app** in this folder.
-2. Verify the **Period end day** and date are correct.
-3. The **Turno Report** is auto-filled if a matching file exists in `Raw/`. If not, click **Browse** to select it.
-4. Click **Run Export**.
-5. The Excel file is created in `Timesheets/` and opens automatically.
+2. Verify the **Period end day**.
+3. Select all applicable input reports to process. Use **Advanced Settings** to show or hide report options.
+4. Confirm the **Output File**.
+5. Click **Run Export**.
+6. Review warnings in **Output Log**, then review the generated Excel workbook.
 
 ## Input files
 
-- **Turno CSV** (`_turno.csv`) — Cleaning job records exported from Turno. Place in `Raw/`.
-- **Timeclock CSV** (`_time.csv`) — Punch-in/out records from the timeclock system (optional, under Advanced Settings). Place in `Raw/`.
-- **Employee Rates** (`timesheet-rates.csv`) — Lookup table in this folder with columns: ID, NAME, RATE, START, EXTRA, DETAILS.
+- **Notion Report** (`MM-DD-YYYY_notion.csv`) - Bi-weekly contractor hourly timesheet export from Notion. The app reads `Person`, falling back to `Team Member` when `Person` is blank, and converts `Start Time (UTC)` / `End Time (UTC)` to Puerto Rico time.
+- **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, and Other.
+- **Timeclock File** (`MM-DD-YYYY_time.csv`) - Optional NGTecoTime punch export. The app uses the first and last punch per person per day.
+- **Employee Rates** (`timesheet-rates.csv`) - Lookup table in this folder with `ID`, `NAME`, `RATE`, `START`, `EXTRA`, and `DETAILS`.
+
+Put report files in `Raw/` or a year folder such as `Raw/2026/`. The app auto-fills files matching the selected period end date.
 
 ## Output
 
-An Excel workbook with:
-- One sheet per employee showing hours worked and cleaning jobs
-- Location sections split into Mango Villas, Casa Damisela, and Other
-- A Summary sheet with totals for all employees
+Generated workbooks are normally saved in `Timesheets/`.
+
+Each worker sheet includes:
+
+- **Hourly Work** - Notion and timeclock rows paid as `Hours * RATE`.
+- **Mango Villas**, **Casa Damisela**, and **Other** - Turno cleaning jobs paid from the Turno cleaning price.
+- **Summary** - totals, recurring extras, withholding, final total, and a reviewed dropdown.
+
+The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay/job, and review status.
 
 ## Notes
 
-- Input CSV filenames should contain a date like `MM-DD-YYYY` (e.g., `04-01-2026_turno.csv`). This sets the week range shown on each sheet.
-- The `_dev/` folder contains source code and build tools — you can ignore it.
+- Notion files use a 14-day period ending on the date in the filename.
+- Non-Notion exports keep the existing 7-day period behavior.
+- Expense reimbursement rows are not imported yet. Add an explicit expense export example before updating that workflow.
+- Name matching uses the first two normalized name tokens. A stable employee ID in Notion would make matching safer.
+
+## For maintainers
+
+See `AGENTS.md` for implementation details, CLI usage, testing notes, and maintenance guidance.

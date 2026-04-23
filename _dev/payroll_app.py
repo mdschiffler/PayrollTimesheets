@@ -1,7 +1,7 @@
 """
 Optihome Payroll Processing — Tkinter GUI
 
-Provides file pickers for the timeclock CSV, turno CSV, and output Excel file,
+Provides file pickers for Notion, Turno, timeclock, and output Excel files,
 then runs the export-timesheet process and displays results.
 """
 
@@ -79,6 +79,16 @@ process_timesheet = export_mod.process_timesheet
 
 DAYS_OF_WEEK = list(calendar.day_name)  # ['Monday', ..., 'Sunday']
 _CONFIG_FILE = os.path.expanduser("~/.optihome_payroll_config.json")
+REPORT_VISIBILITY_DEFAULTS = {
+    "notion": True,
+    "turno": True,
+    "time": False,
+}
+RUN_BUTTON_BG = "#00897b"
+RUN_BUTTON_ACTIVE_BG = "#00695c"
+RUN_BUTTON_DISABLED_BG = "#607d8b"
+RUN_BUTTON_FG = "#0b2f2a"
+RUN_BUTTON_DISABLED_FG = "#263238"
 
 
 def _load_config():
@@ -115,6 +125,79 @@ def _shorten_path(path, segments=3):
         return path
     return "/" + "/".join(parts[-segments:])
 
+
+class Tooltip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _event=None):
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 18
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify="left",
+            background="#fffde7",
+            foreground="#222222",
+            relief="solid",
+            borderwidth=1,
+            wraplength=300,
+            padx=8,
+            pady=5,
+        )
+        label.pack()
+
+    def hide(self, _event=None):
+        if self.tipwindow:
+            self.tipwindow.destroy()
+            self.tipwindow = None
+
+
+def label_with_tip(parent, text, tip, bg=None, fg=None):
+    frame_opts = {}
+    if bg is not None:
+        frame_opts["bg"] = bg
+    frame = tk.Frame(parent, **frame_opts)
+    label_opts = {"text": text, "anchor": "w"}
+    if bg is not None:
+        label_opts["bg"] = bg
+    if fg is not None:
+        label_opts["fg"] = fg
+    tk.Label(frame, **label_opts).pack(side="left")
+    create_help_icon(frame, tip, bg=bg).pack(side="left", padx=(7, 0))
+    return frame
+
+
+def create_help_icon(parent, tip, bg=None):
+    icon_opts = {
+        "text": "i",
+        "fg": "white",
+        "bg": "#1976d2",
+        "activeforeground": "white",
+        "activebackground": "#1565c0",
+        "cursor": "question_arrow",
+        "font": ("Helvetica", 9, "bold"),
+        "width": 2,
+        "height": 1,
+        "relief": "solid",
+        "borderwidth": 1,
+        "highlightthickness": 1,
+        "highlightbackground": "#90caf9",
+        "highlightcolor": "#90caf9",
+    }
+    icon = tk.Label(parent, **icon_opts)
+    Tooltip(icon, tip)
+    return icon
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
@@ -136,14 +219,20 @@ class PayrollApp(tk.Tk):
         # Full paths stored separately from the display variables
         self._time_path = ""
         self._turno_path = ""
+        self._notion_path = ""
         self._output_path = ""
         self._rates_path = os.path.join(self._project_dir, "timesheet-rates.csv")
 
         config = _load_config()
         self._end_day_var = tk.StringVar(value=config.get("end_day", "Wednesday"))
+        self._report_visible_vars = {
+            key: tk.BooleanVar(value=bool(config.get(f"show_{key}", default)))
+            for key, default in REPORT_VISIBILITY_DEFAULTS.items()
+        }
 
         self._build_ui()
         self._auto_load_paths()
+        self._apply_report_visibility(center=False)
         self._center_window()
 
     # ---- layout -----------------------------------------------------------
@@ -152,6 +241,8 @@ class PayrollApp(tk.Tk):
         pad = {"padx": 12, "pady": 4}
         muted_fg = "#888888"
         muted_font = ("Helvetica", 10)
+        self.columnconfigure(0, weight=1)
+        self._report_widgets = {}
 
         row = 0
 
@@ -166,9 +257,9 @@ class PayrollApp(tk.Tk):
         steps.pack(anchor="w", pady=(6, 0))
         for i, step in enumerate([
             "Verify the period end date",
-            "Select the turno report",
+            "Select all applicable input reports to process; adjust visible report options in Advanced Settings",
+            "Choose the output file",
             "Click Run Export",
-            "(Optional) Adjust Advanced Settings",
         ], 1):
             tk.Label(
                 steps, text=f"{i}. {step}", font=("Helvetica", 11),
@@ -179,7 +270,11 @@ class PayrollApp(tk.Tk):
         # --- Period End Day ---
         day_frame = tk.Frame(self)
         day_frame.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 4))
-        tk.Label(day_frame, text="Period end day:").pack(side="left")
+        label_with_tip(
+            day_frame,
+            "Period end day:",
+            "The app uses the most recent selected weekday to auto-suggest report and output filenames.",
+        ).pack(side="left")
         day_combo = ttk.Combobox(
             day_frame, textvariable=self._end_day_var,
             values=DAYS_OF_WEEK, width=12, state="readonly",
@@ -194,16 +289,53 @@ class PayrollApp(tk.Tk):
         tk.Frame(self, height=4).grid(row=row, column=0, columnspan=2)
         row += 1
 
-        # --- Turno CSV (primary input) ---
-        tk.Label(self, text="Turno Report:", anchor="w").grid(
-            row=row, column=0, columnspan=2, sticky="w", **pad
+        # --- Notion CSV ---
+        notion_label = label_with_tip(
+            self,
+            "Notion Report:",
+            "Bi-weekly contractor time report exported from Notion. Use files named like 04-22-2026_notion.csv.",
         )
+        notion_label.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
+        row += 1
+        self._notion_display = tk.StringVar()
+        self._notion_entry = tk.Entry(
+            self, textvariable=self._notion_display, width=52,
+            state="readonly", readonlybackground="white", fg="black"
+        )
+        self._notion_entry.grid(row=row, column=0, sticky="we", padx=(12, 4), pady=2)
+        notion_btn_frame = tk.Frame(self)
+        notion_btn_frame.grid(row=row, column=1, padx=(0, 12), pady=2)
+        tk.Button(notion_btn_frame, text="Browse\u2026", width=10, command=self._browse_notion).pack(
+            side="left", padx=(0, 2)
+        )
+        self._notion_clear_btn = tk.Button(
+            notion_btn_frame, text="\u2715", width=2, command=self._clear_notion, state="disabled"
+        )
+        self._notion_clear_btn.pack(side="left")
+        row += 1
+        self._notion_full_label = tk.Label(
+            self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
+        )
+        self._notion_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
+        self._report_widgets["notion"] = [
+            notion_label, self._notion_entry, notion_btn_frame, self._notion_full_label
+        ]
+        row += 1
+
+        # --- Turno CSV (primary input) ---
+        turno_label = label_with_tip(
+            self,
+            "Turno Report:",
+            "Cleaning job report exported from Turno. This feeds the Mango Villas, Casa Damisela, and Other sections.",
+        )
+        turno_label.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
         row += 1
         self._turno_display = tk.StringVar()
-        tk.Entry(self, textvariable=self._turno_display, width=52,
-                 state="readonly", readonlybackground="white", fg="black").grid(
-            row=row, column=0, sticky="we", padx=(12, 4), pady=2
+        self._turno_entry = tk.Entry(
+            self, textvariable=self._turno_display, width=52,
+            state="readonly", readonlybackground="white", fg="black"
         )
+        self._turno_entry.grid(row=row, column=0, sticky="we", padx=(12, 4), pady=2)
         turno_btn_frame = tk.Frame(self)
         turno_btn_frame.grid(row=row, column=1, padx=(0, 12), pady=2)
         tk.Button(turno_btn_frame, text="Browse\u2026", width=10, command=self._browse_turno).pack(
@@ -216,12 +348,18 @@ class PayrollApp(tk.Tk):
             self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
         )
         self._turno_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
+        self._report_widgets["turno"] = [
+            turno_label, self._turno_entry, turno_btn_frame, self._turno_full_label
+        ]
         row += 1
 
         # --- Output Excel ---
-        tk.Label(self, text="Output File:", anchor="w").grid(
-            row=row, column=0, columnspan=2, sticky="w", **pad
+        output_label = label_with_tip(
+            self,
+            "Output File:",
+            "Excel workbook to create. The app auto-suggests a file in Timesheets based on the period end date.",
         )
+        output_label.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
         row += 1
         self._output_display = tk.StringVar()
         tk.Entry(self, textvariable=self._output_display, width=52,
@@ -243,20 +381,41 @@ class PayrollApp(tk.Tk):
         row += 1
 
         # --- Run button ---
-        self._run_btn = ttk.Button(
-            self, text="Run Export", command=self._run_export,
+        self._run_btn = tk.Button(
+            self,
+            text="Run Export",
+            command=self._run_export,
+            width=18,
+            height=2,
+            bg=RUN_BUTTON_BG,
+            fg=RUN_BUTTON_FG,
+            activebackground=RUN_BUTTON_ACTIVE_BG,
+            activeforeground=RUN_BUTTON_FG,
+            disabledforeground=RUN_BUTTON_DISABLED_FG,
+            font=("Helvetica", 15, "bold"),
+            relief="raised",
+            borderwidth=2,
+            cursor="hand2",
+            highlightthickness=1,
+            highlightbackground="#4db6ac",
         )
-        self._run_btn.grid(row=row, column=0, columnspan=2, pady=(12, 4), ipady=4)
+        self._run_btn.grid(row=row, column=0, columnspan=2, pady=(18, 10))
         row += 1
 
         # --- Advanced Settings (collapsed) ---
         self._advanced_visible = False
+        advanced_header = tk.Frame(self)
+        advanced_header.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0))
         self._advanced_btn = tk.Button(
-            self, text="\u25b6  Advanced Settings", command=self._toggle_advanced,
+            advanced_header, text="\u25b6  Advanced Settings", command=self._toggle_advanced,
             relief="flat", anchor="w", fg="#555555", font=("Helvetica", 11),
             activeforeground="#333333",
         )
-        self._advanced_btn.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0))
+        self._advanced_btn.pack(side="left")
+        create_help_icon(
+            advanced_header,
+            "Choose which report pickers are visible and select optional support files.",
+        ).pack(side="left", padx=(7, 0))
         row += 1
 
         self._advanced_frame = tk.Frame(self, padx=8, pady=8)
@@ -267,17 +426,29 @@ class PayrollApp(tk.Tk):
         row += 1
 
         # --- Status area ---
-        tk.Label(self, text="Status:", anchor="w").grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0)
+        output_log_label = label_with_tip(
+            self,
+            "Output Log:",
+            "Shows export progress, warnings, and errors from the processing script.",
         )
+        output_log_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0))
         row += 1
         frame = tk.Frame(self)
         frame.grid(row=row, column=0, columnspan=2, sticky="nswe", padx=12, pady=(2, 12))
-        self._status = tk.Text(frame, height=10, width=62, state="disabled", wrap="word")
+        self._status = tk.Text(frame, height=16, width=68, state="disabled", wrap="word")
         scrollbar = tk.Scrollbar(frame, command=self._status.yview)
         self._status.configure(yscrollcommand=scrollbar.set)
         self._status.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+        row += 1
+
+        tk.Label(
+            self,
+            text="© Optihome Services LLC - 2026",
+            anchor="center",
+            fg="#888888",
+            font=("Helvetica", 10),
+        ).grid(row=row, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 12))
 
         # Tag styles for coloured status messages
         self._status.tag_configure("success", foreground="#2e7d32")
@@ -285,23 +456,50 @@ class PayrollApp(tk.Tk):
         self._status.tag_configure("error", foreground="#c62828")
 
     def _build_advanced_section(self):
-        """Build the Timeclock and Employee Rates fields inside the advanced frame."""
+        """Build report visibility, Timeclock, and Employee Rates fields."""
         f = self._advanced_frame
         muted_fg = "#888888"
         muted_font = ("Helvetica", 10)
 
         arow = 0
 
-        # --- Timeclock CSV ---
-        tk.Label(f, text="Timeclock File (optional):", anchor="w").grid(
-            row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2)
+        visibility_label = label_with_tip(
+            f,
+            "Visible Input Reports:",
+            "Checked reports appear in the main app and are included when Run Export is clicked.",
         )
+        visibility_label.grid(row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        arow += 1
+
+        visibility_frame = tk.Frame(f)
+        visibility_frame.grid(row=arow, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        for key, label in [
+            ("notion", "Notion Report"),
+            ("turno", "Turno Report"),
+            ("time", "Timeclock File"),
+        ]:
+            tk.Checkbutton(
+                visibility_frame,
+                text=label,
+                variable=self._report_visible_vars[key],
+                command=self._on_report_visibility_changed,
+            ).pack(side="left", padx=(0, 12))
+        arow += 1
+
+        # --- Timeclock CSV ---
+        time_label = label_with_tip(
+            f,
+            "Timeclock File (optional):",
+            "NGTecoTime punch report. The app groups each person's first and last punch per day.",
+        )
+        time_label.grid(row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2))
         arow += 1
         self._time_display = tk.StringVar()
-        tk.Entry(f, textvariable=self._time_display, width=48,
-                 state="readonly", readonlybackground="white", fg="black").grid(
-            row=arow, column=0, sticky="we", padx=(0, 4), pady=2
+        self._time_entry = tk.Entry(
+            f, textvariable=self._time_display, width=48,
+            state="readonly", readonlybackground="white", fg="black"
         )
+        self._time_entry.grid(row=arow, column=0, sticky="we", padx=(0, 4), pady=2)
         time_btn_frame = tk.Frame(f)
         time_btn_frame.grid(row=arow, column=1, padx=(0, 0), pady=2)
         tk.Button(time_btn_frame, text="Browse\u2026", width=10, command=self._browse_time).pack(
@@ -314,12 +512,18 @@ class PayrollApp(tk.Tk):
             f, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=400, justify="left"
         )
         self._time_full_label.grid(row=arow, column=0, columnspan=2, sticky="w", padx=2, pady=(0, 6))
+        self._report_widgets["time"] = [
+            time_label, self._time_entry, time_btn_frame, self._time_full_label
+        ]
         arow += 1
 
         # --- Employee Rates CSV ---
-        tk.Label(f, text="Employee Rates:", anchor="w").grid(
-            row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2)
+        rates_label = label_with_tip(
+            f,
+            "Employee Rates:",
+            "CSV lookup for employee IDs, names, hourly rates, start dates, recurring extras, and notes.",
         )
+        rates_label.grid(row=arow, column=0, columnspan=2, sticky="w", pady=(0, 2))
         arow += 1
         self._rates_display = tk.StringVar(value=_shorten_path(self._rates_path))
         tk.Entry(f, textvariable=self._rates_display, width=48,
@@ -352,6 +556,29 @@ class PayrollApp(tk.Tk):
         self.geometry("")
         self._center_window()
 
+    def _on_report_visibility_changed(self):
+        config = _load_config()
+        for key, var in self._report_visible_vars.items():
+            config[f"show_{key}"] = bool(var.get())
+        _save_config(config)
+        self._apply_report_visibility()
+
+    def _is_report_visible(self, key):
+        var = self._report_visible_vars.get(key)
+        return bool(var.get()) if var is not None else True
+
+    def _apply_report_visibility(self, center=True):
+        for key, widgets in getattr(self, "_report_widgets", {}).items():
+            visible = self._is_report_visible(key)
+            for widget in widgets:
+                if visible:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+        self.geometry("")
+        if center:
+            self._center_window()
+
     def _refresh_end_date(self):
         """Update the end date label from the current day selection."""
         day = self._end_day_var.get()
@@ -381,6 +608,12 @@ class PayrollApp(tk.Tk):
         self._time_full_label.config(text=path)
         self._time_clear_btn.config(state="normal" if path else "disabled")
 
+    def _set_notion_path(self, path):
+        self._notion_path = path
+        self._notion_display.set(_shorten_path(path) if path else "")
+        self._notion_full_label.config(text=path)
+        self._notion_clear_btn.config(state="normal" if path else "disabled")
+
     def _set_turno_path(self, path):
         self._turno_path = path
         self._turno_display.set(_shorten_path(path) if path else "")
@@ -398,19 +631,41 @@ class PayrollApp(tk.Tk):
         config = _load_config()
         end_date = _get_period_end_date(self._end_day_var.get())
         date_str = end_date.strftime("%m-%d-%Y")
+        year_str = end_date.strftime("%Y")
 
         time_dir = config.get("last_time_dir", self._raw_dir)
         turno_dir = config.get("last_turno_dir", self._raw_dir)
+        notion_dir = config.get("last_notion_dir", self._raw_dir)
         output_dir = config.get("last_output_dir", self._timesheets_dir)
 
-        time_candidate = os.path.join(time_dir, f"{date_str}_time.csv")
+        time_candidate = self._find_report_candidate(time_dir, year_str, f"{date_str}_time.csv")
         self._set_time_path(time_candidate if os.path.isfile(time_candidate) else "")
 
-        turno_candidate = os.path.join(turno_dir, f"{date_str}_turno.csv")
+        turno_candidate = self._find_report_candidate(turno_dir, year_str, f"{date_str}_turno.csv")
         self._set_turno_path(turno_candidate if os.path.isfile(turno_candidate) else "")
+
+        notion_candidate = self._find_report_candidate(notion_dir, year_str, f"{date_str}_notion.csv")
+        self._set_notion_path(notion_candidate if os.path.isfile(notion_candidate) else "")
 
         output_candidate = os.path.join(output_dir, f"{date_str}.xlsx")
         self._set_output_path(output_candidate)
+
+    def _find_report_candidate(self, preferred_dir, year_str, filename):
+        search_dirs = [
+            preferred_dir,
+            os.path.join(preferred_dir, year_str),
+            self._raw_dir,
+            os.path.join(self._raw_dir, year_str),
+        ]
+        seen = set()
+        for folder in search_dirs:
+            if not folder or folder in seen:
+                continue
+            seen.add(folder)
+            candidate = os.path.join(folder, filename)
+            if os.path.isfile(candidate):
+                return candidate
+        return os.path.join(preferred_dir, filename)
 
     # ---- file dialogs -----------------------------------------------------
 
@@ -429,6 +684,23 @@ class PayrollApp(tk.Tk):
 
     def _clear_time(self):
         self._set_time_path("")
+
+    def _browse_notion(self):
+        config = _load_config()
+        initial_dir = config.get("last_notion_dir", self._raw_dir)
+        path = filedialog.askopenfilename(
+            title="Select Notion CSV",
+            initialdir=initial_dir,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if path:
+            _save_config({**config, "last_notion_dir": os.path.dirname(path)})
+            self._set_notion_path(path)
+            if not self._output_path:
+                self._suggest_output(path)
+
+    def _clear_notion(self):
+        self._set_notion_path("")
 
     def _browse_turno(self):
         config = _load_config()
@@ -467,7 +739,7 @@ class PayrollApp(tk.Tk):
 
     def _suggested_output_name(self):
         """Derive an output filename from whichever input CSV is set."""
-        for source in (self._time_path, self._turno_path):
+        for source in (self._notion_path, self._turno_path, self._time_path):
             if source:
                 basename = os.path.basename(source)
                 match = re.search(r"(\d{2}-\d{2}-\d{4})", basename)
@@ -528,12 +800,16 @@ class PayrollApp(tk.Tk):
         self._status.configure(state="disabled")
 
     def _run_export(self):
-        time_csv = self._time_path.strip()
-        turno_csv = self._turno_path.strip()
+        notion_csv = self._notion_path.strip() if self._is_report_visible("notion") else ""
+        turno_csv = self._turno_path.strip() if self._is_report_visible("turno") else ""
+        time_csv = self._time_path.strip() if self._is_report_visible("time") else ""
         output_xlsx = self._output_path.strip()
 
-        if not time_csv and not turno_csv:
-            messagebox.showwarning("Missing file", "Please select at least one input CSV file (Timeclock or Turno).")
+        if not notion_csv and not turno_csv and not time_csv:
+            messagebox.showwarning(
+                "Missing file",
+                "Please select at least one visible input CSV file (Notion, Turno, or Timeclock).",
+            )
             return
         if not output_xlsx:
             messagebox.showwarning("Missing file", "Please choose an output Excel file location.")
@@ -543,29 +819,32 @@ class PayrollApp(tk.Tk):
 
         self._clear_status()
         self._append_status("Running export...")
-        self._run_btn.configure(text="Running...")
-        self._run_btn.state(["disabled"])
+        self._run_btn.configure(
+            text="Running...",
+            state="disabled",
+            bg=RUN_BUTTON_DISABLED_BG,
+            fg=RUN_BUTTON_DISABLED_FG,
+        )
 
         # Run in a background thread so the UI stays responsive
         thread = threading.Thread(
             target=self._export_thread,
-            args=(time_csv or None, turno_csv or None, output_xlsx, rates_csv),
+            args=(time_csv or None, turno_csv or None, notion_csv or None, output_xlsx, rates_csv),
             daemon=True,
         )
         thread.start()
 
-    def _export_thread(self, time_csv, turno_csv, output_xlsx, rates_csv):
+    def _export_thread(self, time_csv, turno_csv, notion_csv, output_xlsx, rates_csv):
         try:
             message, warnings = process_timesheet(
-                time_csv, output_xlsx, turno_csv, rates_csv=rates_csv
+                time_csv, output_xlsx, turno_csv, rates_csv=rates_csv, notion_csv=notion_csv
             )
             self.after(0, self._on_export_done, message, warnings, None, output_xlsx)
         except Exception as exc:
             self.after(0, self._on_export_done, None, [], exc, None)
 
     def _on_export_done(self, message, warnings, error, output_path):
-        self._run_btn.state(["!disabled"])
-        self._run_btn.configure(text="Run Export")
+        self._run_btn.configure(text="Run Export", state="normal", bg=RUN_BUTTON_BG, fg=RUN_BUTTON_FG)
         if error:
             self._append_status(f"ERROR: {error}", "error")
             messagebox.showerror("Export failed", str(error))
