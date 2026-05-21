@@ -12,7 +12,7 @@ from xlsxwriter.utility import quote_sheetname
 
 
 LOCAL_TZ = ZoneInfo("America/Puerto_Rico")
-LOCATION_BUCKETS = ["Mango Villas", "Casa Damisela", "Other"]
+LOCATION_BUCKETS = ["Mango Villas", "Casa Damisela", "MARU", "Other"]
 AMBIGUOUS_PERSON = object()
 
 
@@ -57,6 +57,8 @@ def map_turno_location(property_group, property_alias):
         return "Mango Villas"
     if "DAMISELA" in combined:
         return "Casa Damisela"
+    if "MARU" in combined:
+        return "MARU"
     return "Other"
 
 
@@ -718,14 +720,14 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
             section_dollar_cells.append(hourly_info["dollar_total_cell"])
             current_section_row = hourly_info["next_start"]
 
-            should_show_location_sections = "Housekeeping" in role or _has_turno_rows(person_turno)
-            if should_show_location_sections:
-                section_definitions = [
+            should_show_clean_sections = "Housekeeping" in role or _has_turno_rows(person_turno)
+            if should_show_clean_sections:
+                clean_section_definitions = [
                     ("Mango Villas", ["Apt X", "Apt X"]),
                     ("Casa Damisela", ["Apt X", "Apt X"]),
-                    ("Other", ["Details here", ""]),
+                    ("MARU", ["Apt X", "Apt X"]),
                 ]
-                for section_header, placeholders in section_definitions:
+                for section_header, placeholders in clean_section_definitions:
                     section_info = write_location_section(
                         worksheet,
                         current_section_row,
@@ -737,6 +739,17 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
                     section_dollar_cells.append(section_info["dollar_total_cell"])
                     section_clean_ranges.append((section_info["clean_start_excel"], section_info["clean_end_excel"]))
                     current_section_row = section_info["next_start"]
+
+            other_section_info = write_location_section(
+                worksheet,
+                current_section_row,
+                "Other",
+                ["Details here", ""],
+                person_turno.get("Other", []),
+            )
+            section_hours_cells.append(other_section_info["hours_total_cell"])
+            section_dollar_cells.append(other_section_info["dollar_total_cell"])
+            current_section_row = other_section_info["next_start"]
 
             summary_header_row = current_section_row
             worksheet.merge_range(summary_header_row, 0, summary_header_row, 6, "Summary", summary_header_format)
