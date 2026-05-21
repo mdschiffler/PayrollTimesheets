@@ -16,7 +16,7 @@ The workbook has a Summary sheet plus one sheet per worker. It supports hourly w
 ## Input files
 
 - **Notion Report** (`MM-DD-YYYY_notion.csv`) - Bi-weekly contractor hourly timesheet export from Notion. The app reads `Person`, falling back to `Team Member` when `Person` is blank, and converts `Start Time (UTC)` / `End Time (UTC)` to Puerto Rico time.
-- **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, and Other.
+- **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, MARU, and Other.
 - **Timeclock File** (`MM-DD-YYYY_time.csv`) - Optional NGTecoTime punch export. The app uses the first and last punch per person per day.
 - **Employee Rates** (`timesheet-rates.csv`) - Lookup table in this folder with `ID`, `NAME`, `RATE`, `START`, `EXTRA`, and `DETAILS`.
 
@@ -29,7 +29,7 @@ Generated workbooks are normally saved in `Timesheets/`.
 Each worker sheet includes:
 
 - **Hourly Work** - Notion and timeclock rows paid as `Hours * RATE`.
-- **Mango Villas**, **Casa Damisela**, and **Other** - Turno cleaning jobs paid from the Turno cleaning price.
+- **Mango Villas**, **Casa Damisela**, **MARU**, and **Other** - Turno cleaning jobs paid from the Turno cleaning price.
 - **Summary** - totals, recurring extras, withholding, final total, and a reviewed dropdown.
 
 The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay/job, and review status.
@@ -43,4 +43,6 @@ The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay
 
 ## For maintainers
 
-See `AGENTS.md` for implementation details, CLI usage, testing notes, and maintenance guidance.
+See [AGENTS.md](AGENTS.md) for the agent workflow rules and an index into [docs/](docs/) (architecture, data model, pipeline, setup, testing, roadmap, and the review queue).
+
+_Last updated: 2026-05-21_

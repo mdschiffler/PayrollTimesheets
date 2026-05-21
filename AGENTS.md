@@ -1,85 +1,75 @@
-# Optihome Payroll Processing - Agent Guide
+# Optihome Payroll Processing — Agent Guide
 
-## Purpose
+_Last updated: 2026-05-21_
 
-This project converts payroll report CSVs into a reviewable Excel workbook for manual payroll approval. The user-facing entry point is the macOS app alias at the repo root; the source lives in `_dev/`.
+This is the root guide for any coding agent working in this repo. Read it first.
 
-## Architecture
+The repo is the source of truth. If this guide or any `docs/` file disagrees with the code, fix the doc in the same change that touches the code.
 
-- `_dev/export-timesheet.py` contains the processing logic and CLI.
-- `_dev/payroll_app.py` is the Tkinter desktop wrapper.
-- `_dev/build_app.sh` rebuilds the standalone macOS app with PyInstaller.
-- `timesheet-rates.csv` is the editable employee lookup table.
+## What this project is
 
-The exporter accepts any combination of:
+A local-only macOS desktop app + Python CLI that turns Notion / Turno / NGTecoTime CSV exports into a per-worker Excel workbook for manual payroll review. Single non-technical operator. No network calls, no database. Full mission, stack, and entry points: [docs/snapshot.md](docs/snapshot.md).
 
-- Notion contractor timesheet CSV (`*_notion.csv`)
-- Turno cleaning job CSV (`*_turno.csv`)
-- NGTecoTime timeclock CSV (`*_time.csv`)
+## First principles
 
-At least one input report is required.
+- **Understand before changing.** Read the relevant `docs/` file and the affected source file before editing. Only ask the operator when the answer cannot be discovered from the repo and the ambiguity would materially change the implementation.
+- **Smallest coherent change.** Prefer the minimum diff that satisfies the request. No drive-by refactors, formatting sweeps, dependency churn, or speculative abstractions.
+- **Preserve the worktree.** Unrelated edits may be present. Never revert, overwrite, or reformat work you did not author unless explicitly asked.
+- **Follow existing conventions.** The project uses pandas + xlsxwriter, Tkinter `ttk`, single-file modules, and snake_case helpers. Match that.
+- **Be honest about uncertainty.** If a check could not run because of missing data, credentials, or services, say so. Do not claim unrun checks passed.
 
-## Processing Rules
+## Workflow rules for any non-trivial change
 
-- Notion rows are hourly work. `Person` identifies the paid worker; if blank, `Team Member` is used. Timestamps ending in `Z` are converted from UTC to `America/Puerto_Rico`. All rows with valid positive hours are included regardless of `Status`.
-- Timeclock rows are hourly work. The script groups by person and punch date, then uses the earliest and latest punch as start/end.
-- Turno rows are cleaning jobs. Cleaning prices come from Turno and are split when multiple teammates are assigned to the same property on the same date.
-- Hourly pay is calculated from `timesheet-rates.csv` `RATE`.
-- Recurring extras and withholding use `START`, `EXTRA`, and `DETAILS` from `timesheet-rates.csv`.
-- If a Notion file is present, the period is 14 days ending on the `MM-DD-YYYY` filename date. Otherwise the period is 7 days.
-- Expense reimbursement import is intentionally out of scope until a real Notion expense export exists.
+1. Inspect the relevant source file(s) and the matching `docs/` page.
+2. State (or note in the conversation) the smallest safe approach.
+3. Make focused changes using existing patterns.
+4. Run the required checks for the change's risk band — see [docs/testing.md](docs/testing.md).
+5. Update any `docs/` page whose content drifted from the new behavior, and bump that page's `Last updated` date.
+6. Report what changed, what was verified, what was skipped, and any residual risk.
 
-## CLI
+For ambiguous work, write a short plan first (goal, success criteria, in/out of scope, public-interface impact, edge cases, verification). Confirm with the operator before implementing.
 
-Preferred flag form:
+For code review, prioritize: security → data loss → correctness → performance → UX regressions → missing tests → cleanup. Track ongoing items in [docs/review-queue.md](docs/review-queue.md).
 
-```bash
-python3 _dev/export-timesheet.py \
-  --output /tmp/04-22-2026.xlsx \
-  --notion Raw/2026/04-22-2026_notion.csv \
-  --turno Raw/2026/04-22-2026_turno.csv \
-  --rates timesheet-rates.csv
-```
+## Hard rules — do not break
 
-Legacy positional form is still supported:
+- **No new external dependencies, services, scheduled jobs, network calls, or paid APIs** without an explicit request. See the non-goals list in [docs/roadmap.md](docs/roadmap.md).
+- **No destructive operations** without an explicit `--apply` / confirmation flag. The exporter overwrites the target `.xlsx`; that is the only destructive write today and it operates on a derived artifact.
+- **Do not fabricate missing data.** Skip rows with a warning rather than inventing values. Missing rates produce $0 hourly pay and a warning, never an invented rate.
+- **Do not modify input CSVs** under `Raw/` or operator-owned data under `Timesheets/` and `Quarterly Cleaning Expenses/`.
+- **Do not introduce auth, billing, accounts, multi-user features, cloud sync, web UIs, mobile UIs, or background jobs.**
+- **Do not commit anything under `Raw/`, `Timesheets/`, `Quarterly Cleaning Expenses/`, `*.xlsx`, `dist/`, `_dev/build/`, `_dev/venv/`, or `.DS_Store`** — see [.gitignore](.gitignore).
 
-```bash
-python3 _dev/export-timesheet.py Timesheets/04-22-2026.xlsx Raw/2026/04-22-2026_time.csv Raw/2026/04-22-2026_turno.csv
-```
+## Required check after edits
 
-## Development Checks
-
-Run syntax checks after edits:
+After editing `_dev/export-timesheet.py` or `_dev/payroll_app.py`:
 
 ```bash
 python3 -m py_compile _dev/export-timesheet.py _dev/payroll_app.py
 ```
 
-Useful smoke tests:
+For risk-matched verification beyond `py_compile`, see [docs/testing.md](docs/testing.md).
 
-```bash
-python3 _dev/export-timesheet.py --output /tmp/04-22-2026_notion.xlsx --notion Raw/2026/04-22-2026_notion.csv --rates timesheet-rates.csv
-python3 _dev/export-timesheet.py --output /tmp/04-22-2026_turno.xlsx --turno Raw/2026/04-22-2026_turno.csv --rates timesheet-rates.csv
-python3 _dev/export-timesheet.py --output /tmp/01-21-2026_time.xlsx --time Raw/2026/01-21-2026_time.csv --rates timesheet-rates.csv
-```
+## Documentation index
 
-Inspect generated workbooks in Excel or by unzipping the `.xlsx` and checking `xl/sharedStrings.xml` / worksheet XML.
+Each file below carries its own `Last updated` date. If you change behavior that a file describes, update the file and its date in the same change.
 
-## GUI Notes
+| File | When to read it |
+|---|---|
+| [docs/snapshot.md](docs/snapshot.md) | Mission, primary user, stack, source-of-truth map, entry points. |
+| [docs/architecture.md](docs/architecture.md) | Module layout, pipeline stages, state flow, public contracts. |
+| [docs/data-model.md](docs/data-model.md) | CSV schemas, period semantics, withholding rules, missing-data handling. |
+| [docs/pipeline.md](docs/pipeline.md) | Operator workflow, file conventions, what to watch for at run time. |
+| [docs/product-ux.md](docs/product-ux.md) | User, workflows, copy rules, visible states, accessibility. |
+| [docs/setup-commands.md](docs/setup-commands.md) | Prerequisites, install, dev commands, CLI reference, build script. |
+| [docs/testing.md](docs/testing.md) | Required checks per risk band, smoke scenarios, manual GUI checklist. |
+| [docs/roadmap.md](docs/roadmap.md) | In-scope, explicit non-goals, open ideas, constraints. |
+| [docs/review-queue.md](docs/review-queue.md) | Prioritized known issues (P0 / P1 / P2) and resolved log. |
+| [README.md](README.md) | Wife-facing usage. Keep its tone plain and non-technical. |
 
-The GUI persists preferences in `~/.optihome_payroll_config.json`, including the period end day, last-used folders, and visible report selectors. Default visible reports are Notion and Turno; Timeclock is hidden until enabled in Advanced Settings.
+## Maintenance guidance
 
-When source changes need to be reflected in the double-clickable app, rebuild:
-
-```bash
-bash _dev/build_app.sh
-```
-
-The build script creates `dist/Optihome Payroll Processing.app` and a Finder alias named `Optihome Payroll Processing.app` at the project root.
-
-## Maintenance Guidance
-
-- Keep `README.md` focused on the human workflow.
-- Keep this file as the canonical technical guide for future agents.
-- Avoid duplicating long technical details in `_dev/CLAUDE.md`; point it here instead.
-- Preserve local raw CSVs, generated workbooks, and existing unrelated worktree changes.
+- Keep [README.md](README.md) focused on the operator workflow. Do not push agent-targeted detail into it.
+- Keep the canonical technical guidance in `docs/`. The root `AGENTS.md` (this file) is workflow + rules + index — do not duplicate long technical content here.
+- `_dev/CLAUDE.md` is a stub pointer; do not move content into it.
+- Preserve local raw CSVs, generated workbooks, the rates CSV, and any unrelated worktree changes.
