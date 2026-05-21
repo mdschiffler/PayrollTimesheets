@@ -18,6 +18,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 APP_NAME="Optihome Payroll Processing"
+export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$PROJECT_DIR/_dev/build/pyinstaller-config}"
 
 # Activate venv if present
 if [ -f "_dev/venv/bin/activate" ]; then

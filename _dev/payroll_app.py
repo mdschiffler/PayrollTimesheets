@@ -82,6 +82,7 @@ _CONFIG_FILE = os.path.expanduser("~/.optihome_payroll_config.json")
 REPORT_VISIBILITY_DEFAULTS = {
     "notion": True,
     "turno": True,
+    "expenses": True,
     "time": False,
 }
 RUN_BUTTON_BG = "#00897b"
@@ -220,6 +221,7 @@ class PayrollApp(tk.Tk):
         self._time_path = ""
         self._turno_path = ""
         self._notion_path = ""
+        self._expenses_path = ""
         self._output_path = ""
         self._rates_path = os.path.join(self._project_dir, "timesheet-rates.csv")
 
@@ -353,6 +355,39 @@ class PayrollApp(tk.Tk):
         ]
         row += 1
 
+        # --- Expenses CSV ---
+        expenses_label = label_with_tip(
+            self,
+            "Expenses Report:",
+            "Expense export from Notion. Rows are listed on each worker sheet; only Reimbursable = Yes adds to payroll.",
+        )
+        expenses_label.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
+        row += 1
+        self._expenses_display = tk.StringVar()
+        self._expenses_entry = tk.Entry(
+            self, textvariable=self._expenses_display, width=52,
+            state="readonly", readonlybackground="white", fg="black"
+        )
+        self._expenses_entry.grid(row=row, column=0, sticky="we", padx=(12, 4), pady=2)
+        expenses_btn_frame = tk.Frame(self)
+        expenses_btn_frame.grid(row=row, column=1, padx=(0, 12), pady=2)
+        tk.Button(expenses_btn_frame, text="Browse\u2026", width=10, command=self._browse_expenses).pack(
+            side="left", padx=(0, 2)
+        )
+        self._expenses_clear_btn = tk.Button(
+            expenses_btn_frame, text="\u2715", width=2, command=self._clear_expenses, state="disabled"
+        )
+        self._expenses_clear_btn.pack(side="left")
+        row += 1
+        self._expenses_full_label = tk.Label(
+            self, text="", anchor="w", fg=muted_fg, font=muted_font, wraplength=420, justify="left"
+        )
+        self._expenses_full_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 2))
+        self._report_widgets["expenses"] = [
+            expenses_label, self._expenses_entry, expenses_btn_frame, self._expenses_full_label
+        ]
+        row += 1
+
         # --- Output Excel ---
         output_label = label_with_tip(
             self,
@@ -476,6 +511,7 @@ class PayrollApp(tk.Tk):
         for key, label in [
             ("notion", "Notion Report"),
             ("turno", "Turno Report"),
+            ("expenses", "Expenses Report"),
             ("time", "Timeclock File"),
         ]:
             tk.Checkbutton(
@@ -620,6 +656,12 @@ class PayrollApp(tk.Tk):
         self._turno_full_label.config(text=path)
         self._turno_clear_btn.config(state="normal" if path else "disabled")
 
+    def _set_expenses_path(self, path):
+        self._expenses_path = path
+        self._expenses_display.set(_shorten_path(path) if path else "")
+        self._expenses_full_label.config(text=path)
+        self._expenses_clear_btn.config(state="normal" if path else "disabled")
+
     def _set_output_path(self, path):
         self._output_path = path
         self._output_display.set(_shorten_path(path) if path else "")
@@ -636,6 +678,7 @@ class PayrollApp(tk.Tk):
         time_dir = config.get("last_time_dir", self._raw_dir)
         turno_dir = config.get("last_turno_dir", self._raw_dir)
         notion_dir = config.get("last_notion_dir", self._raw_dir)
+        expenses_dir = config.get("last_expenses_dir", self._raw_dir)
         output_dir = config.get("last_output_dir", self._timesheets_dir)
 
         time_candidate = self._find_report_candidate(time_dir, year_str, f"{date_str}_time.csv")
@@ -646,6 +689,9 @@ class PayrollApp(tk.Tk):
 
         notion_candidate = self._find_report_candidate(notion_dir, year_str, f"{date_str}_notion.csv")
         self._set_notion_path(notion_candidate if os.path.isfile(notion_candidate) else "")
+
+        expenses_candidate = self._find_report_candidate(expenses_dir, year_str, f"{date_str}_expenses.csv")
+        self._set_expenses_path(expenses_candidate if os.path.isfile(expenses_candidate) else "")
 
         output_candidate = os.path.join(output_dir, f"{date_str}.xlsx")
         self._set_output_path(output_candidate)
@@ -719,6 +765,23 @@ class PayrollApp(tk.Tk):
     def _clear_turno(self):
         self._set_turno_path("")
 
+    def _browse_expenses(self):
+        config = _load_config()
+        initial_dir = config.get("last_expenses_dir", self._raw_dir)
+        path = filedialog.askopenfilename(
+            title="Select Expenses CSV",
+            initialdir=initial_dir,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if path:
+            _save_config({**config, "last_expenses_dir": os.path.dirname(path)})
+            self._set_expenses_path(path)
+            if not self._output_path:
+                self._suggest_output(path)
+
+    def _clear_expenses(self):
+        self._set_expenses_path("")
+
     def _browse_output(self):
         config = _load_config()
         initial_dir = config.get("last_output_dir", self._timesheets_dir)
@@ -739,7 +802,7 @@ class PayrollApp(tk.Tk):
 
     def _suggested_output_name(self):
         """Derive an output filename from whichever input CSV is set."""
-        for source in (self._notion_path, self._turno_path, self._time_path):
+        for source in (self._notion_path, self._turno_path, self._expenses_path, self._time_path):
             if source:
                 basename = os.path.basename(source)
                 match = re.search(r"(\d{2}-\d{2}-\d{4})", basename)
@@ -802,13 +865,14 @@ class PayrollApp(tk.Tk):
     def _run_export(self):
         notion_csv = self._notion_path.strip() if self._is_report_visible("notion") else ""
         turno_csv = self._turno_path.strip() if self._is_report_visible("turno") else ""
+        expenses_csv = self._expenses_path.strip() if self._is_report_visible("expenses") else ""
         time_csv = self._time_path.strip() if self._is_report_visible("time") else ""
         output_xlsx = self._output_path.strip()
 
-        if not notion_csv and not turno_csv and not time_csv:
+        if not notion_csv and not turno_csv and not expenses_csv and not time_csv:
             messagebox.showwarning(
                 "Missing file",
-                "Please select at least one visible input CSV file (Notion, Turno, or Timeclock).",
+                "Please select at least one visible input CSV file (Notion, Turno, Expenses, or Timeclock).",
             )
             return
         if not output_xlsx:
@@ -829,15 +893,27 @@ class PayrollApp(tk.Tk):
         # Run in a background thread so the UI stays responsive
         thread = threading.Thread(
             target=self._export_thread,
-            args=(time_csv or None, turno_csv or None, notion_csv or None, output_xlsx, rates_csv),
+            args=(
+                time_csv or None,
+                turno_csv or None,
+                notion_csv or None,
+                expenses_csv or None,
+                output_xlsx,
+                rates_csv,
+            ),
             daemon=True,
         )
         thread.start()
 
-    def _export_thread(self, time_csv, turno_csv, notion_csv, output_xlsx, rates_csv):
+    def _export_thread(self, time_csv, turno_csv, notion_csv, expenses_csv, output_xlsx, rates_csv):
         try:
             message, warnings = process_timesheet(
-                time_csv, output_xlsx, turno_csv, rates_csv=rates_csv, notion_csv=notion_csv
+                time_csv,
+                output_xlsx,
+                turno_csv,
+                rates_csv=rates_csv,
+                notion_csv=notion_csv,
+                expenses_csv=expenses_csv,
             )
             self.after(0, self._on_export_done, message, warnings, None, output_xlsx)
         except Exception as exc:

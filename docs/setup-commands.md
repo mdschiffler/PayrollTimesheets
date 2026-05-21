@@ -53,7 +53,7 @@ Legacy positional form (still supported, kept for back-compat — do not rely on
 python3 _dev/export-timesheet.py Timesheets/04-22-2026.xlsx Raw/2026/04-22-2026_time.csv Raw/2026/04-22-2026_turno.csv
 ```
 
-At least one of `--notion`, `--turno`, `--time` is required. `--rates` is optional — if omitted, the exporter walks up from the first input file looking for `timesheet-rates.csv`.
+At least one of `--notion`, `--turno`, `--expenses`, or `--time` is required. `--rates` is optional — if omitted, the exporter walks up from the first input file looking for `timesheet-rates.csv`.
 
 ### Rebuild the macOS app
 
@@ -66,7 +66,7 @@ This:
 1. Activates `_dev/venv` if present.
 2. Installs PyInstaller if missing.
 3. Cleans `_dev/build/` and `dist/Optihome Payroll Processing.app`.
-4. Runs PyInstaller bundling `_dev/payroll_app.py`, `_dev/export-timesheet.py` (as data), `timesheet-rates.csv` (as data), and Tkinter.
+4. Runs PyInstaller with its config/cache under `_dev/build/`, bundling `_dev/payroll_app.py`, `_dev/export-timesheet.py` (as data), `timesheet-rates.csv` (as data), and Tkinter.
 5. Re-signs the bundle (copies to `/tmp` first to dodge iCloud resource forks).
 6. Refreshes the Finder alias `Optihome Payroll Processing.app` at the repo root.
 
@@ -76,10 +76,10 @@ None. The project intentionally has no environment-based configuration. The GUI 
 
 ## File-system conventions
 
-- Inputs live under `Raw/<year>/` with the date pattern `MM-DD-YYYY` in the filename.
+- Inputs live under `Raw/<year>/` with the date pattern `MM-DD-YYYY` in the filename. The GUI auto-fills `*_notion.csv`, `*_turno.csv`, `*_expenses.csv`, and optional `*_time.csv`.
 - Outputs live under `Timesheets/` with the same date pattern.
 - Older inputs are moved under `Raw/z-ARCHIVE/` by hand.
-- `Quarterly Cleaning Expenses/` is operator-maintained and outside the exporter's scope.
+- `Quarterly Cleaning Expenses/` is operator-maintained; the exporter imports period expense CSVs into payroll workbooks but does not create quarterly expense PDFs.
 
 ## What is gitignored
 

@@ -7,6 +7,7 @@ _Last updated: 2026-05-21_
 1. Export new CSVs for the period:
    - Notion contractor timesheet → save as `Raw/<year>/<MM-DD-YYYY>_notion.csv`.
    - Turno cleaning report → save as `Raw/<year>/<MM-DD-YYYY>_turno.csv`.
+   - Notion expenses report → save as `Raw/<year>/<MM-DD-YYYY>_expenses.csv`.
    - (Optional) NGTecoTime punch export → save as `Raw/<year>/<MM-DD-YYYY>_time.csv`.
    The `MM-DD-YYYY` portion is the period-end date and drives auto-fill in the GUI.
 2. Open the app, confirm period end day, confirm auto-filled inputs, confirm output path under `Timesheets/`.
@@ -15,9 +16,9 @@ _Last updated: 2026-05-21_
 
 The wife-facing version of this lives in [README.md](../README.md).
 
-## Manual / out-of-scope operations
+## Manual operations
 
-- **Expense reimbursement import:** not implemented. There is no example Notion expense export yet — do not infer schema. `Quarterly Cleaning Expenses/` is maintained by hand.
+- **Quarterly expense PDFs:** `Quarterly Cleaning Expenses/` is still maintained by hand. The payroll exporter imports period expense CSV rows into the generated workbook; it does not generate quarterly PDF reports.
 - **Quarterly cleanup:** old `Raw/` files are moved into `Raw/z-ARCHIVE/` by hand. There is no automation.
 - **Rate table edits:** the operator edits `timesheet-rates.csv` directly in a spreadsheet app or text editor.
 
@@ -39,6 +40,7 @@ This project has no destructive operations in the current scope. If a future cha
 ## External data ownership
 
 - Notion, Turno, and NGTecoTime own their source data. The exporter is a read-only consumer of their exports.
+- Expense rows from Notion are listed on each worker sheet. Only rows marked `Reimbursable = Yes` are added after withholding.
 - The generated workbook becomes the operator's reviewed artifact and the system of record for what was paid. Treat it as user-owned data — do not overwrite reviewed cells in code, do not auto-mutate prior `Timesheets/*.xlsx` files.
 
 ## What to watch for

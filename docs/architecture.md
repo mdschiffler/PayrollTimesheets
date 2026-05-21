@@ -30,18 +30,19 @@ aa-Payroll/
 
 ### Exporter — [_dev/export-timesheet.py](../_dev/export-timesheet.py)
 
-Single-file pipeline. Public entry point is `process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None)` at `_dev/export-timesheet.py:556`. CLI shim is `_run_cli` at `_dev/export-timesheet.py:906`.
+Single-file pipeline. Public entry point is `process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None, expenses_csv=None)`. CLI shim is `_run_cli`.
 
 Pipeline stages, in order:
 
-1. **Validate inputs.** At least one of Notion / Turno / Timeclock must be present; each provided path must exist.
+1. **Validate inputs.** At least one of Notion / Turno / Expenses / Timeclock must be present; each provided path must exist.
 2. **Load rates.** `_load_rates` reads `timesheet-rates.csv`, walking up from the source file if no explicit path is given. Builds two maps: `rates_dict` keyed by normalized employee ID, and `rates_by_name` keyed by the first two normalized name tokens.
-3. **Parse each source.** Stage-specific parsers populate three shared dicts keyed by `(person_id, person_name)`:
+3. **Parse each source.** Stage-specific parsers populate shared dicts keyed by `(person_id, person_name)`:
    - `persons` — membership set.
    - `hourly_events` — list of hourly rows (Notion + Timeclock).
    - `turno_events` — dict of cleaning rows per location bucket (`LOCATION_BUCKETS = ["Mango Villas", "Casa Damisela", "MARU", "Other"]`).
+   - `expense_events` — list of Notion expense rows keyed by `Expensed By`.
 4. **Determine period.** `_find_date_in_paths` extracts an `MM-DD-YYYY` date from the output or input filename. `_person_period` picks 14 days if any Notion rows exist, else 7.
-5. **Write the workbook.** A `Summary` sheet plus one sheet per person, built section by section: Hourly Work → location sections (when applicable) → Other → per-sheet Summary block (totals, extras, allowance, 10% withheld, final total, reviewed flag).
+5. **Write the workbook.** A `Summary` sheet plus one sheet per person, built section by section: Hourly Work → location sections (when applicable) → Other → Expenses (when applicable) → per-sheet Summary block (totals, extras, allowance, 10% withheld, final total, reviewed flag).
 6. **Emit warnings.** Missing rates, unparseable dates, ambiguous name matches, empty files, etc. are accumulated and returned alongside the success message.
 
 Name matching uses `name_key` (`_dev/export-timesheet.py:30`): NFKD-normalized, uppercase, alpha-only, first two tokens. The same tokens are used for both rate lookup and de-duping people seen across sources.
@@ -63,9 +64,10 @@ PyInstaller invocation that bundles `payroll_app.py` plus `export-timesheet.py` 
 ## State and data flow
 
 ```
-Notion CSV ┐
-Turno CSV  ├─► _parse_* ──► persons / hourly_events / turno_events ──► per-sheet writer ──► .xlsx
-Timeclock  ┘                       ▲
+Notion CSV   ┐
+Turno CSV    ├─► _parse_* ──► persons / hourly_events / turno_events / expense_events ──► per-sheet writer ──► .xlsx
+Expenses CSV │                       ▲
+Timeclock    ┘                       │
                                    │
                   timesheet-rates.csv (rates_dict, rates_by_name)
 ```
@@ -74,9 +76,9 @@ The exporter holds the entire run in memory; there is no streaming, no checkpoin
 
 ## Public interfaces (stable contracts)
 
-- CLI: the `--output`, `--notion`, `--turno`, `--time`, `--rates` flags and the legacy positional form (`<output> <timeclock> [turno]`).
+- CLI: the `--output`, `--notion`, `--turno`, `--expenses`, `--time`, `--rates` flags and the legacy positional form (`<output> <timeclock> [turno]`).
 - Library: `process_timesheet(...)` signature and return shape `(message: str, warnings: list[str])`.
-- Workbook shape: `Summary` sheet column layout (Person, Role, Period, Total Days, Total Hours, Total Cleans, Total $, Withheld $, Pay/Hour, Pay/Job, Reviewed) and the per-sheet section order (Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Summary block).
+- Workbook shape: `Summary` sheet column layout (Person, Role, Period, Total Days, Total Hours, Total Cleans, Total $, Withheld $, Pay/Hour, Pay/Job, Reviewed) and the per-sheet section order (Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Expenses when applicable → Summary block).
 - Rates CSV: column names `ID`, `NAME`, `RATE`, `START`, `EXTRA`, `DETAILS`.
 
 Changing any of these is a contract change — update [data-model.md](data-model.md), [pipeline.md](pipeline.md), and [setup-commands.md](setup-commands.md) in the same PR.

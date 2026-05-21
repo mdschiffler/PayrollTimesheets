@@ -4,7 +4,7 @@ _Last updated: 2026-05-21_
 
 ## Mission
 
-Turn payroll CSV reports (Notion contractor timesheets, Turno cleaning jobs, NGTecoTime punches) into a reviewable per-worker Excel workbook so the operator can approve payroll in one pass.
+Turn payroll CSV reports (Notion contractor timesheets, Turno cleaning jobs, Notion expenses, NGTecoTime punches) into a reviewable per-worker Excel workbook so the operator can approve payroll in one pass.
 
 ## Primary user
 
@@ -36,8 +36,8 @@ When repo and brief conflict, the repo wins. Within the repo, the canonical arti
 
 - **End user:** `Optihome Payroll Processing.app` at repo root (alias to `dist/Optihome Payroll Processing.app`).
 - **GUI dev:** `python3 _dev/payroll_app.py`.
-- **CLI:** `python3 _dev/export-timesheet.py --output <path>.xlsx [--notion …] [--turno …] [--time …] [--rates …]`.
-- **Library API:** `process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None)` in `_dev/export-timesheet.py:556`.
+- **CLI:** `python3 _dev/export-timesheet.py --output <path>.xlsx [--notion …] [--turno …] [--expenses …] [--time …] [--rates …]`.
+- **Library API:** `process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None, expenses_csv=None)` in `_dev/export-timesheet.py`.
 - **Rebuild app:** `bash _dev/build_app.sh`.
 
 ## What this project is NOT

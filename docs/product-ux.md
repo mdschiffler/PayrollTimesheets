@@ -11,7 +11,7 @@ _Last updated: 2026-05-21_
 ## Workflows the GUI must serve
 
 1. **Fortnightly payroll run.** Open the app, accept the auto-filled period end and source files, click Run Export, scan warnings, open the workbook.
-2. **Mid-period spot-check.** Same flow, but maybe with only one source file present. The exporter must accept any non-empty combination of Notion / Turno / Timeclock.
+2. **Mid-period spot-check.** Same flow, but maybe with only one source file present. The exporter must accept any non-empty combination of Notion / Turno / Expenses / Timeclock.
 3. **Onboarding a new worker.** The operator edits `timesheet-rates.csv` (in Numbers / Excel / a text editor) and re-runs. New `START` dates within 28 days trigger the $500 no-withholding allowance default (shown shaded red for review).
 
 ## Copy
@@ -27,7 +27,7 @@ When changing user-visible strings:
 ## Visible states the app must handle
 
 - **Empty:** no source file selected → Run Export is disabled / produces a clear error. (Current behavior: `process_timesheet` raises `ValueError` if no input is provided. The GUI should surface that in the Output Log.)
-- **Partial inputs:** one or two of three sources present → exporter must still produce a workbook covering only that data.
+- **Partial inputs:** any subset of the four sources present → exporter must still produce a workbook covering only that data.
 - **No usable rows:** valid CSVs but every row was skipped → workbook contains only the Summary sheet and a warning explains why.
 - **Loading / running:** export runs on a worker thread; the button should not look frozen. The Output Log appends progress.
 - **Error:** missing file, malformed CSV, missing columns → user-facing message names the file and the missing column, not a stack trace.

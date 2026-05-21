@@ -4,8 +4,8 @@ _Last updated: 2026-05-21_
 
 ## In scope (current)
 
-- Convert Notion / Turno / NGTecoTime CSVs into a per-worker Excel workbook with a Summary sheet.
-- Hourly pay, cleaning pay (with split-when-shared logic), recurring extras, no-withholding allowance, and 10% withholding line for manual review.
+- Convert Notion / Turno / Notion expense / NGTecoTime CSVs into a per-worker Excel workbook with a Summary sheet.
+- Hourly pay, cleaning pay (with split-when-shared logic), reimbursable expenses, recurring extras, no-withholding allowance, and 10% withholding line for manual review.
 - Local-only operation: macOS app, iCloud Drive storage, no network calls.
 - Single non-technical operator running the bundled `.app`.
 - Tkinter GUI with persisted preferences in `~/.optihome_payroll_config.json`.
@@ -21,7 +21,7 @@ These have been considered and intentionally _excluded_. Do not introduce them w
 - **Scheduled jobs, cron, background sync.**
 - **External API calls or paid services** (Notion API, Turno API, Stripe, SendGrid, etc.).
 - **Database persistence.** CSVs and `.xlsx` files are the system of record.
-- **Expense reimbursement import.** Out of scope until a real Notion expense export exists. Do not infer the schema.
+- **Quarterly expense PDF generation.** Period expense rows can be imported into payroll workbooks; quarterly PDF reports remain manual.
 - **Automatic email / Slack / SMS notifications.**
 - **Auto-mutating prior generated workbooks.** Once a workbook is written and the operator has reviewed it, it is treated as the reviewed artifact.
 - **Replacing Tkinter with a different UI toolkit.**
@@ -32,7 +32,6 @@ These have been considered and intentionally _excluded_. Do not introduce them w
 Captured here so they are not lost. None of these are scheduled and none should be implemented without an explicit go-ahead.
 
 - **Stable employee ID in Notion.** Today name-fallback matching uses the first two normalized name tokens. A real ID column in the Notion export would remove the ambiguity warnings. (Mentioned in [README.md](../README.md) "Notes".)
-- **Expense reimbursement import.** Wait for a real Notion expense export sample before designing the schema.
 - **Automatic archival of old `Raw/` files** into `Raw/z-ARCHIVE/`.
 - **Sanity-check report** comparing a new workbook to the previous period's totals (per-worker delta, headcount delta) before approval.
 - **Bundled requirements file** (`requirements.txt` or `pyproject.toml`) so the venv is reproducible without remembering the dependency list.

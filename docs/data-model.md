@@ -7,6 +7,7 @@ _Last updated: 2026-05-21_
 - **Employee identity, rate, recurring extras, withholding details:** [timesheet-rates.csv](../timesheet-rates.csv).
 - **Hourly contractor work:** Notion CSV export (`*_notion.csv`).
 - **Cleaning jobs:** Turno CSV export (`*_turno.csv`).
+- **Expenses:** Notion expense CSV export (`*_expenses.csv`).
 - **Time-clock punches (optional, currently hidden by default in GUI):** NGTecoTime CSV export (`*_time.csv`).
 - **Generated workbook:** `Timesheets/<MM-DD-YYYY>.xlsx`.
 
@@ -49,9 +50,24 @@ Required columns: `Teammate`, `Start Date & Time`, `End Date & Time`, `Cleaning 
 Rules:
 
 - Location bucket is derived from `Property Group` + `Property Alias`: `MANGO` → "Mango Villas", `DAMISELA` → "Casa Damisela", `MARU` → "MARU", else "Other".
-- When multiple teammates appear on the same `Property Alias` + date, the cleaning price is split evenly across them (`_parse_turno`, `_dev/export-timesheet.py:414`).
+- When multiple teammates appear on the same `Property Alias` + date, the cleaning price is split evenly across them (`_parse_turno`).
 - Hours computed from start/end. If outside `[0.25, 5]` they are clamped to a flat 2.0 (defensive default for malformed exports).
 - Rows missing teammate, with invalid name tokens, or with missing start/end are skipped with a warning.
+
+## Notion expenses CSV (`*_expenses.csv`)
+
+Required columns: `Expensed By`, `Date`, `Expense`, `Amount`, `Reimbursable`.
+
+Optional columns surfaced into the workbook: `Category`, `Vendor`, `Property`, `Unit`, `Payment Method`, `Approved By`, `Notes`, `Expense URL`.
+
+Rules:
+
+- Rows are matched to worker sheets by `Expensed By`, using the same name fallback as Notion and Turno.
+- `Date` accepts `YYYY-MM-DD`, `MM/DD/YYYY`, or `MM-DD-YYYY`; unparseable dates are skipped with a warning.
+- `Amount` accepts plain numbers, comma-separated numbers, and dollar-prefixed values. Invalid amounts are skipped with a warning.
+- Every usable row is listed in an **Expenses** section on the worker sheet.
+- Only rows whose `Reimbursable` value is yes-like (`Yes`, `Y`, `True`, or `1`) are added to `Expense reimbursements $`. All other rows stay visible but do not change payroll.
+- Expense reimbursements are added after the 10% withholding calculation, so they are not withheld.
 
 ## NGTecoTime CSV (`*_time.csv`)
 
@@ -75,10 +91,11 @@ Rules:
 Per worker, the Summary block contains:
 
 - `Extras $` — `EXTRA` from the rates CSV, with `DETAILS` shown alongside.
-- `Subtotal $` — sum of all section totals + extras.
+- `Subtotal $` — sum of payroll section totals + extras, excluding one-off expense reimbursements.
+- `Expense reimbursements $` — shown when the worker has expense rows; sums rows marked `Reimbursable = Yes` from the **Expenses** section.
 - `No-withholding allowance applied this check $` — defaults to **$500** when the employee's `START` is within the last 28 days OR the current month is January, otherwise **$0**. The cell is validated to `[0, 500]` and shaded red when defaulted to $500 to flag review.
 - `10% withheld today $` — `ROUNDDOWN(MAX(Subtotal − Allowance, 0) * 0.10, 2)`.
-- `Total $` — `Subtotal − Withheld`.
+- `Total $` — `Subtotal − Withheld + Expense reimbursements`.
 - `Reviewed` — manual dropdown (`y` / blank).
 
 The $500 cap, the 10% rate, and the 28-day / January rule are baked into the exporter. Changing any of them is a contract change.
@@ -94,4 +111,5 @@ The $500 cap, the 10% rate, and the 28-day / January rule are baked into the exp
 
 - Missing rate → row still appears, hourly pay shows `$0`, and the person is named in a trailing warning. Do not silently impute a rate.
 - Ambiguous name match (same first two tokens map to multiple rate rows or to multiple already-seen people) → row is skipped with a warning. Resolve by fixing the source or by aligning `NAME` in the rates CSV.
+- Expense rows with missing `Expensed By`, invalid dates, or invalid amounts are skipped with a warning. Unknown `Reimbursable` values are treated as `No` with a warning.
 - Empty workbook (no usable rows) → a warning is added and only the `Summary` sheet is written.

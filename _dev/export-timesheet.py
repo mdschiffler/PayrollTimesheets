@@ -116,6 +116,32 @@ def _parse_datetime_series(series, formats):
     return parsed
 
 
+def _parse_money_value(value):
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    is_parenthesized_negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace("$", "").replace(",", "").strip()
+    parsed = pd.to_numeric(pd.Series([text]), errors="coerce").iloc[0]
+    if pd.isna(parsed):
+        return None
+    amount = float(parsed)
+    if is_parenthesized_negative:
+        return -amount
+    return amount
+
+
+def _normalize_reimbursable(value):
+    text = clean_value(value).lower()
+    if text in {"yes", "y", "true", "1"}:
+        return "Yes", True, False
+    if text in {"", "no", "n", "false", "0"}:
+        return "No", False, False
+    return "No", False, True
+
+
 def _load_rates(rates_csv, source_file, warnings):
     if rates_csv and os.path.exists(rates_csv):
         rates_file = rates_csv
@@ -199,10 +225,12 @@ def _get_rate_info(person_id, person_name, rates_dict, rates_by_name):
     }, False
 
 
-def _ensure_person(persons, hourly_events, turno_events, person_key):
+def _ensure_person(persons, hourly_events, turno_events, person_key, expense_events=None):
     persons.setdefault(person_key, True)
     hourly_events.setdefault(person_key, [])
     turno_events.setdefault(person_key, {bucket: [] for bucket in LOCATION_BUCKETS})
+    if expense_events is not None:
+        expense_events.setdefault(person_key, [])
 
 
 def _find_existing_person_by_name(persons, person_name, warnings, context):
@@ -464,6 +492,106 @@ def _parse_turno(turno_csv, persons, hourly_events, turno_events, rates_by_name,
             events.sort(key=lambda item: item["start_dt"])
 
 
+def _parse_expenses(expenses_csv, persons, hourly_events, turno_events, expense_events, rates_by_name, warnings):
+    expenses_df = pd.read_csv(expenses_csv)
+    expenses_df.columns = [col.strip() for col in expenses_df.columns]
+
+    expected_cols = [
+        "Expensed By",
+        "Date",
+        "Category",
+        "Expense",
+        "Vendor",
+        "Property",
+        "Unit",
+        "Amount",
+        "Payment Method",
+        "Reimbursable",
+        "Approved By",
+        "Notes",
+        "Expense URL",
+    ]
+    _normalize_expected_columns(expenses_df, expected_cols)
+
+    required_cols = ["Expensed By", "Date", "Expense", "Amount", "Reimbursable"]
+    missing_cols = [col for col in required_cols if col not in expenses_df.columns]
+    if missing_cols:
+        raise ValueError(f"Expenses file missing columns: {', '.join(missing_cols)}")
+
+    if expenses_df.empty:
+        warnings.append(f"Expenses file '{os.path.basename(expenses_csv)}' has no rows.")
+        return
+
+    expense_formats = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"]
+    expenses_df["Expense Dt"] = _parse_datetime_series(expenses_df["Date"], expense_formats)
+
+    for idx, row in expenses_df.iterrows():
+        row_number = idx + 2
+        expensed_by = clean_value(row.get("Expensed By", ""))
+        if not expensed_by:
+            warnings.append(f"Expenses row {row_number}: missing Expensed By; row skipped.")
+            continue
+
+        expense_dt = row["Expense Dt"]
+        if pd.isna(expense_dt):
+            warnings.append(f"Expenses row {row_number}: missing or invalid date for '{expensed_by}'; row skipped.")
+            continue
+
+        amount = _parse_money_value(row.get("Amount", ""))
+        if amount is None:
+            warnings.append(f"Expenses row {row_number}: missing or invalid amount for '{expensed_by}'; row skipped.")
+            continue
+
+        reimbursement_label, is_reimbursable, unknown_reimbursement = _normalize_reimbursable(
+            row.get("Reimbursable", "")
+        )
+        if unknown_reimbursement:
+            warnings.append(
+                f"Expenses row {row_number}: Reimbursable value '{clean_value(row.get('Reimbursable', ''))}' "
+                "was not recognized; treating it as No."
+            )
+
+        person_key = _person_from_name(expensed_by, persons, rates_by_name, warnings, f"Expenses row {row_number}")
+        if person_key is None:
+            continue
+        _ensure_person(persons, hourly_events, turno_events, person_key, expense_events)
+
+        property_name = clean_value(row.get("Property", ""))
+        unit = clean_value(row.get("Unit", ""))
+        property_label = property_name
+        if unit:
+            property_label = f"{property_name} - {unit}" if property_name else unit
+
+        payment_method = clean_value(row.get("Payment Method", ""))
+        approved_by = clean_value(row.get("Approved By", ""))
+        notes = clean_value(row.get("Notes", ""))
+        url = clean_value(row.get("Expense URL", ""))
+        details = "; ".join(
+            part for part in [
+                f"Payment: {payment_method}" if payment_method else "",
+                f"Approved by: {approved_by}" if approved_by else "",
+                notes,
+                url,
+            ] if part
+        )
+
+        expense_events[person_key].append({
+            "date": expense_dt.strftime("%m/%d/%Y"),
+            "category": clean_value(row.get("Category", "")),
+            "expense": clean_value(row.get("Expense", "")),
+            "vendor": clean_value(row.get("Vendor", "")),
+            "property": property_label,
+            "amount": amount,
+            "reimbursable": reimbursement_label,
+            "is_reimbursable": is_reimbursable,
+            "details": details,
+            "expense_dt": expense_dt,
+        })
+
+    for rows in expense_events.values():
+        rows.sort(key=lambda item: item["expense_dt"])
+
+
 def _safe_sheet_name(base_name, used_names):
     safe_name = re.sub(r"[\[\]\:\*\?\/\\]", "-", base_name).strip() or "Employee"
     safe_name = safe_name[:31]
@@ -517,10 +645,11 @@ def _has_hourly_source(hourly_rows, source):
     return any(row.get("source") == source for row in hourly_rows)
 
 
-def _person_role(hourly_rows, turno_location_rows):
+def _person_role(hourly_rows, turno_location_rows, expense_rows=None):
     has_turno_rows = _has_turno_rows(turno_location_rows)
     has_notion_rows = _has_hourly_source(hourly_rows, "Notion")
     has_timeclock_rows = _has_hourly_source(hourly_rows, "Timeclock")
+    has_expense_rows = bool(expense_rows)
 
     if has_turno_rows and has_notion_rows:
         return "Housekeeping / Contractor"
@@ -530,6 +659,8 @@ def _person_role(hourly_rows, turno_location_rows):
         return "Contractor"
     if has_timeclock_rows:
         return "Housekeeping"
+    if has_expense_rows:
+        return "Expenses"
     return ""
 
 
@@ -553,20 +684,22 @@ def _person_period(hourly_rows, turno_location_rows, period_end):
     return period_start, period_end, _period_text(period_start, period_end)
 
 
-def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None):
+def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, notion_csv=None, expenses_csv=None):
     """Process payroll CSV inputs into an Excel workbook.
 
     csv_file is the legacy timeclock input. At least one of csv_file, turno_csv,
-    or notion_csv must be provided. Returns (message, warnings) on success.
+    notion_csv, or expenses_csv must be provided. Returns (message, warnings)
+    on success.
     """
     warnings = []
 
     has_timeclock = bool(csv_file and str(csv_file).strip())
     has_turno = bool(turno_csv and str(turno_csv).strip())
     has_notion = bool(notion_csv and str(notion_csv).strip())
+    has_expenses = bool(expenses_csv and str(expenses_csv).strip())
 
-    if not has_timeclock and not has_turno and not has_notion:
-        raise ValueError("At least one input file (Notion, Turno, or Timeclock CSV) is required.")
+    if not has_timeclock and not has_turno and not has_notion and not has_expenses:
+        raise ValueError("At least one input file (Notion, Turno, Timeclock, or Expenses CSV) is required.")
 
     if has_timeclock and not os.path.exists(csv_file):
         raise FileNotFoundError(f"Timeclock file not found: {csv_file}")
@@ -574,14 +707,17 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
         raise FileNotFoundError(f"Turno file not found: {turno_csv}")
     if has_notion and not os.path.exists(notion_csv):
         raise FileNotFoundError(f"Notion file not found: {notion_csv}")
+    if has_expenses and not os.path.exists(expenses_csv):
+        raise FileNotFoundError(f"Expenses file not found: {expenses_csv}")
 
-    input_files = [path for path in [notion_csv, csv_file, turno_csv] if path]
+    input_files = [path for path in [notion_csv, csv_file, turno_csv, expenses_csv] if path]
     source_file = input_files[0]
     rates_dict, rates_by_name = _load_rates(rates_csv, source_file, warnings)
 
     persons = {}
     hourly_events = {}
     turno_events = {}
+    expense_events = {}
 
     if has_timeclock:
         _parse_timeclock(csv_file, persons, hourly_events, turno_events, warnings)
@@ -589,6 +725,8 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
         _parse_notion(notion_csv, persons, hourly_events, turno_events, rates_by_name, warnings)
     if has_turno:
         _parse_turno(turno_csv, persons, hourly_events, turno_events, rates_by_name, warnings)
+    if has_expenses:
+        _parse_expenses(expenses_csv, persons, hourly_events, turno_events, expense_events, rates_by_name, warnings)
 
     period_end = _find_date_in_paths(output_excel, input_files)
     missing_rate_people = set()
@@ -677,12 +815,48 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
                 "clean_end_excel": last_excel_row,
             }
 
+        def write_expense_section(worksheet, start_row, data_rows):
+            worksheet.write(start_row, 0, "Expenses", header_format)
+            section_headers = ["Date", "Category", "Expense", "Vendor", "Amount $", "Reimbursable", "Details"]
+            for col, name in enumerate(section_headers, start=1):
+                worksheet.write(start_row, col, name, header_format)
+
+            data_start = start_row + 1
+            row_count = max(1, len(data_rows))
+            for offset in range(row_count):
+                if offset < len(data_rows):
+                    row_data = data_rows[offset]
+                    worksheet.write(data_start + offset, 0, row_data.get("property", ""))
+                    worksheet.write(data_start + offset, 1, row_data.get("date", ""))
+                    worksheet.write(data_start + offset, 2, row_data.get("category", ""))
+                    worksheet.write(data_start + offset, 3, row_data.get("expense", ""))
+                    worksheet.write(data_start + offset, 4, row_data.get("vendor", ""))
+                    worksheet.write_number(data_start + offset, 5, row_data.get("amount", 0), currency_format)
+                    worksheet.write(data_start + offset, 6, row_data.get("reimbursable", "No"))
+                    worksheet.write(data_start + offset, 7, row_data.get("details", ""))
+
+            total_row = data_start + row_count
+            first_excel_row = data_start + 1
+            last_excel_row = data_start + row_count
+            worksheet.write(total_row, 0, "Total reimbursable $")
+            worksheet.write_formula(
+                total_row,
+                5,
+                f'=SUMIF(G{first_excel_row}:G{last_excel_row},"Yes",F{first_excel_row}:F{last_excel_row})',
+                currency_format,
+            )
+            return {
+                "next_start": total_row + 2,
+                "reimbursement_total_cell": f"F{total_row + 1}",
+            }
+
         for person_id, person_name in sorted(persons.keys(), key=lambda item: (name_key(item[1]), str(item[0]))):
             base_sheet_name = str(person_name) if str(person_id) == str(person_name) else f"{person_id} - {person_name}"
             sheet_name = _safe_sheet_name(base_sheet_name, used_sheet_names)
             hourly_rows = hourly_events.get((person_id, person_name), [])
             person_turno = turno_events.get((person_id, person_name), {})
-            role = _person_role(hourly_rows, person_turno)
+            expense_rows = expense_events.get((person_id, person_name), [])
+            role = _person_role(hourly_rows, person_turno, expense_rows)
             person_period_start, person_period_end, person_period_text = _person_period(hourly_rows, person_turno, period_end)
             worked_day_count = _count_worked_days(hourly_rows, person_turno, person_period_start, person_period_end)
 
@@ -714,6 +888,7 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
             section_hours_cells = []
             section_dollar_cells = []
             section_clean_ranges = []
+            expense_reimbursement_cell = None
 
             hourly_info = write_hourly_section(worksheet, current_section_row, hourly_rows, hourly_rate)
             section_hours_cells.append(hourly_info["hours_total_cell"])
@@ -750,6 +925,11 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
             section_hours_cells.append(other_section_info["hours_total_cell"])
             section_dollar_cells.append(other_section_info["dollar_total_cell"])
             current_section_row = other_section_info["next_start"]
+
+            if expense_rows:
+                expense_section_info = write_expense_section(worksheet, current_section_row, expense_rows)
+                expense_reimbursement_cell = expense_section_info["reimbursement_total_cell"]
+                current_section_row = expense_section_info["next_start"]
 
             summary_header_row = current_section_row
             worksheet.merge_range(summary_header_row, 0, summary_header_row, 6, "Summary", summary_header_format)
@@ -789,7 +969,15 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
             subtotal_formula = "=" + "+".join(subtotal_parts)
             worksheet.write_formula(subtotal_row_idx, 4, subtotal_formula, currency_format)
 
-            exclusion_row_idx = extras_row_idx + 2
+            next_summary_row = subtotal_row_idx + 1
+            expense_reimbursement_excel_row = None
+            if expense_reimbursement_cell:
+                worksheet.write(next_summary_row, 0, "Expense reimbursements $")
+                worksheet.write_formula(next_summary_row, 4, f"={expense_reimbursement_cell}", currency_format)
+                expense_reimbursement_excel_row = next_summary_row + 1
+                next_summary_row += 1
+
+            exclusion_row_idx = next_summary_row
             worksheet.write(exclusion_row_idx, 0, "No-withholding allowance applied this check $ (max $500/year)")
             if show_red:
                 worksheet.write_number(exclusion_row_idx, 4, allowance_amount, soft_red_format)
@@ -815,6 +1003,8 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
 
             worksheet.write(total_dollar_idx, 0, "Total $")
             final_total_formula = f"=E{subtotal_row_idx + 1} - E{withheld_row_idx + 1}"
+            if expense_reimbursement_excel_row:
+                final_total_formula = f"{final_total_formula} + E{expense_reimbursement_excel_row}"
             worksheet.write_formula(total_dollar_idx, 4, final_total_formula, light_green_currency_format)
 
             review_cell = f"F{total_dollar_idx + 1}"
@@ -910,22 +1100,25 @@ def _run_cli(argv):
         parser.add_argument("--time", help="NGTecoTime timeclock CSV.")
         parser.add_argument("--turno", help="Turno cleaning report CSV.")
         parser.add_argument("--notion", help="Notion contractor timesheet CSV.")
+        parser.add_argument("--expenses", help="Notion expenses CSV.")
         parser.add_argument("--rates", help="Employee rates CSV.")
         args = parser.parse_args(argv)
-        if not args.time and not args.turno and not args.notion:
-            parser.error("At least one of --time, --turno, or --notion is required.")
+        if not args.time and not args.turno and not args.notion and not args.expenses:
+            parser.error("At least one of --time, --turno, --notion, or --expenses is required.")
         return process_timesheet(
             args.time,
             args.output,
             args.turno,
             rates_csv=args.rates,
             notion_csv=args.notion,
+            expenses_csv=args.expenses,
         )
 
     if len(argv) < 2 or len(argv) > 3:
         raise ValueError(
             "Usage: python export-timesheet.py <output_excel> <timeclock_csv> [turno_csv]\n"
-            "   or: python export-timesheet.py --output out.xlsx [--time time.csv] [--turno turno.csv] [--notion notion.csv] [--rates rates.csv]"
+            "   or: python export-timesheet.py --output out.xlsx [--time time.csv] [--turno turno.csv] "
+            "[--notion notion.csv] [--expenses expenses.csv] [--rates rates.csv]"
         )
 
     output_excel = argv[0]

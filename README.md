@@ -2,7 +2,7 @@
 
 Desktop app and command-line exporter for turning payroll CSV reports into a reviewable Excel workbook.
 
-The workbook has a Summary sheet plus one sheet per worker. It supports hourly work from Notion or the timeclock, cleaning jobs from Turno, recurring extras from `timesheet-rates.csv`, and withholding review fields.
+The workbook has a Summary sheet plus one sheet per worker. It supports hourly work from Notion or the timeclock, cleaning jobs from Turno, expense rows from Notion, recurring extras from `timesheet-rates.csv`, and withholding review fields.
 
 ## How to use the app
 
@@ -17,6 +17,7 @@ The workbook has a Summary sheet plus one sheet per worker. It supports hourly w
 
 - **Notion Report** (`MM-DD-YYYY_notion.csv`) - Bi-weekly contractor hourly timesheet export from Notion. The app reads `Person`, falling back to `Team Member` when `Person` is blank, and converts `Start Time (UTC)` / `End Time (UTC)` to Puerto Rico time.
 - **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, MARU, and Other.
+- **Expenses Report** (`MM-DD-YYYY_expenses.csv`) - Notion expense export. Rows appear in an **Expenses** section on the worker sheet. Only rows marked `Reimbursable = Yes` add to the final payroll total.
 - **Timeclock File** (`MM-DD-YYYY_time.csv`) - Optional NGTecoTime punch export. The app uses the first and last punch per person per day.
 - **Employee Rates** (`timesheet-rates.csv`) - Lookup table in this folder with `ID`, `NAME`, `RATE`, `START`, `EXTRA`, and `DETAILS`.
 
@@ -30,6 +31,7 @@ Each worker sheet includes:
 
 - **Hourly Work** - Notion and timeclock rows paid as `Hours * RATE`.
 - **Mango Villas**, **Casa Damisela**, **MARU**, and **Other** - Turno cleaning jobs paid from the Turno cleaning price.
+- **Expenses** - Expense rows grouped by `Expensed By`; reimbursable rows are added after withholding.
 - **Summary** - totals, recurring extras, withholding, final total, and a reviewed dropdown.
 
 The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay/job, and review status.
@@ -38,7 +40,6 @@ The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay
 
 - Notion files use a 14-day period ending on the date in the filename.
 - Non-Notion exports keep the existing 7-day period behavior.
-- Expense reimbursement rows are not imported yet. Add an explicit expense export example before updating that workflow.
 - Name matching uses the first two normalized name tokens. A stable employee ID in Notion would make matching safer.
 
 ## For maintainers
