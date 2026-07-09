@@ -893,34 +893,39 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
             section_clean_ranges = []
             expense_reimbursement_cell = None
 
-            hourly_info = write_hourly_section(worksheet, current_section_row, hourly_rows, hourly_rate)
-            section_hours_cells.append(hourly_info["hours_total_cell"])
-            section_dollar_cells.append(hourly_info["dollar_total_cell"])
-            current_section_row = hourly_info["next_start"]
+            # Sections with no rows are omitted entirely.
+            if hourly_rows:
+                hourly_info = write_hourly_section(worksheet, current_section_row, hourly_rows, hourly_rate)
+                section_hours_cells.append(hourly_info["hours_total_cell"])
+                section_dollar_cells.append(hourly_info["dollar_total_cell"])
+                current_section_row = hourly_info["next_start"]
 
-            should_show_clean_sections = "Housekeeping" in role or _has_turno_rows(person_turno)
-            if should_show_clean_sections:
-                for section_header in ["Mango Villas", "Casa Damisela", "MARU"]:
-                    section_info = write_location_section(
-                        worksheet,
-                        current_section_row,
-                        section_header,
-                        person_turno.get(section_header, []),
-                    )
-                    section_hours_cells.append(section_info["hours_total_cell"])
-                    section_dollar_cells.append(section_info["dollar_total_cell"])
-                    section_clean_ranges.append((section_info["clean_start_excel"], section_info["clean_end_excel"]))
-                    current_section_row = section_info["next_start"]
+            for section_header in ["Mango Villas", "Casa Damisela", "MARU"]:
+                section_rows = person_turno.get(section_header, [])
+                if not section_rows:
+                    continue
+                section_info = write_location_section(
+                    worksheet,
+                    current_section_row,
+                    section_header,
+                    section_rows,
+                )
+                section_hours_cells.append(section_info["hours_total_cell"])
+                section_dollar_cells.append(section_info["dollar_total_cell"])
+                section_clean_ranges.append((section_info["clean_start_excel"], section_info["clean_end_excel"]))
+                current_section_row = section_info["next_start"]
 
-            other_section_info = write_location_section(
-                worksheet,
-                current_section_row,
-                "Other",
-                person_turno.get("Other", []),
-            )
-            section_hours_cells.append(other_section_info["hours_total_cell"])
-            section_dollar_cells.append(other_section_info["dollar_total_cell"])
-            current_section_row = other_section_info["next_start"]
+            other_rows = person_turno.get("Other", [])
+            if other_rows:
+                other_section_info = write_location_section(
+                    worksheet,
+                    current_section_row,
+                    "Other",
+                    other_rows,
+                )
+                section_hours_cells.append(other_section_info["hours_total_cell"])
+                section_dollar_cells.append(other_section_info["dollar_total_cell"])
+                current_section_row = other_section_info["next_start"]
 
             if expense_rows:
                 expense_section_info = write_expense_section(worksheet, current_section_row, expense_rows)

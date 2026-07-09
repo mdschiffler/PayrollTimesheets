@@ -34,6 +34,8 @@ Each worker sheet includes:
 - **Expenses** - Expense rows grouped by `Expensed By`; reimbursable rows are added after withholding.
 - **Summary** - totals, recurring extras, withholding, final total, and a reviewed dropdown.
 
+Sections with no data are left off the sheet, so each worker only sees the sections they worked.
+
 The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay/job, and review status.
 
 ## Notes

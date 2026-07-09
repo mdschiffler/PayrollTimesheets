@@ -1,6 +1,6 @@
 # Architecture
 
-_Last updated: 2026-05-21_
+_Last updated: 2026-07-08_
 
 ## Module layout
 
@@ -42,7 +42,7 @@ Pipeline stages, in order:
    - `turno_events` — dict of cleaning rows per location bucket (`LOCATION_BUCKETS = ["Mango Villas", "Casa Damisela", "MARU", "Other"]`).
    - `expense_events` — list of Notion expense rows keyed by `Expensed By`.
 4. **Determine period.** `_find_date_in_paths` extracts an `MM-DD-YYYY` date from the output or input filename. `_person_period` picks 14 days if any Notion rows exist, else 7.
-5. **Write the workbook.** A `Summary` sheet plus one sheet per person, built section by section: Hourly Work → location sections (when applicable) → Other → Expenses (when applicable) → per-sheet Summary block (totals, extras, allowance, 10% withheld, final total, reviewed flag).
+5. **Write the workbook.** A `Summary` sheet plus one sheet per person, built section by section: Hourly Work → location sections → Other → Expenses → per-sheet Summary block (totals, extras, allowance, 10% withheld, final total, reviewed flag). A section is written only when it has rows; empty sections are omitted from the sheet.
 6. **Emit warnings.** Missing rates, unparseable dates, ambiguous name matches, empty files, etc. are accumulated and returned alongside the success message.
 
 Name matching uses `name_key` (`_dev/export-timesheet.py:30`): NFKD-normalized, uppercase, alpha-only, first two tokens. The same tokens are used for both rate lookup and de-duping people seen across sources.
@@ -78,7 +78,7 @@ The exporter holds the entire run in memory; there is no streaming, no checkpoin
 
 - CLI: the `--output`, `--notion`, `--turno`, `--expenses`, `--time`, `--rates` flags and the legacy positional form (`<output> <timeclock> [turno]`).
 - Library: `process_timesheet(...)` signature and return shape `(message: str, warnings: list[str])`.
-- Workbook shape: `Summary` sheet column layout (Person, Role, Period, Total Days, Total Hours, Total Cleans, Total $, Withheld $, Pay/Hour, Pay/Job, Reviewed) and the per-sheet section order (Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Expenses when applicable → Summary block).
+- Workbook shape: `Summary` sheet column layout (Person, Role, Period, Total Days, Total Hours, Total Cleans, Total $, Withheld $, Pay/Hour, Pay/Job, Reviewed) and the per-sheet section order (Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Expenses → Summary block, each section present only when it has rows).
 - Rates CSV: column names `ID`, `NAME`, `RATE`, `START`, `EXTRA`, `DETAILS`.
 
 Changing any of these is a contract change — update [data-model.md](data-model.md), [pipeline.md](pipeline.md), and [setup-commands.md](setup-commands.md) in the same PR.

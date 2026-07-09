@@ -1,6 +1,6 @@
 # Testing & Verification
 
-_Last updated: 2026-05-21_
+_Last updated: 2026-07-08_
 
 There is no automated test suite. The project ships with a CLI you can point at real or sample CSVs and inspect the output workbook by hand. Treat verification as scenario-driven, not coverage-driven.
 
@@ -56,7 +56,7 @@ python3 _dev/export-timesheet.py \
 For each smoke scenario, open the `.xlsx` and confirm:
 
 - **Summary sheet:** column order is `Person | Role | Period | Total Days | Total Hours | Total Cleans | Total $ | Withheld $ | Pay/Hour | Pay/Job | Reviewed`, with an "All sheets total" row.
-- **Per-worker sheet:** sections appear in this order: Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Expenses when present → Summary block.
+- **Per-worker sheet:** sections appear in this order: Hourly Work → Mango Villas → Casa Damisela → MARU → Other → Expenses → Summary block. Only sections with rows are written; a worker with only MARU cleans shows just MARU + Summary.
 - **Hourly Work:** rates match `timesheet-rates.csv`. Notion rows show start/end in Puerto Rico time.
 - **Turno sections:** when two teammates appear on the same `Property Alias` + date, the rate is split evenly between them.
 - **Allowance row:** shaded red and pre-filled with $500 only for workers whose `START` is within the last 28 days or when the month is January.
