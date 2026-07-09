@@ -16,7 +16,7 @@ The workbook has a Summary sheet plus one sheet per worker. It supports hourly w
 ## Input files
 
 - **Notion Report** (`MM-DD-YYYY_notion.csv`) - Bi-weekly contractor hourly timesheet export from Notion. The app reads `Person`, falling back to `Team Member` when `Person` is blank, and converts `Start Time (UTC)` / `End Time (UTC)` to Puerto Rico time.
-- **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, MARU, and Other.
+- **Turno Report** (`MM-DD-YYYY_turno.csv`) - Cleaning job report exported from Turno. Jobs are grouped into Mango Villas, Casa Damisela, MARU, and Other. Rooms named ROOM ONE through ROOM FIVE count as MARU.
 - **Expenses Report** (`MM-DD-YYYY_expenses.csv`) - Notion expense export. Rows appear in an **Expenses** section on the worker sheet. Only rows marked `Reimbursable = Yes` add to the final payroll total.
 - **Timeclock File** (`MM-DD-YYYY_time.csv`) - Optional NGTecoTime punch export. The app uses the first and last punch per person per day.
 - **Employee Rates** (`timesheet-rates.csv`) - Lookup table in this folder with `ID`, `NAME`, `RATE`, `START`, `EXTRA`, and `DETAILS`.
@@ -46,4 +46,4 @@ The Summary tab rolls up hours, clean counts, totals, withholding, pay/hour, pay
 
 See [AGENTS.md](AGENTS.md) for the agent workflow rules and an index into [docs/](docs/) (architecture, data model, pipeline, setup, testing, roadmap, and the review queue).
 
-_Last updated: 2026-05-21_
+_Last updated: 2026-07-08_

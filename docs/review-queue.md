@@ -1,6 +1,6 @@
 # Code Review Issue Queue
 
-_Last updated: 2026-05-21_
+_Last updated: 2026-07-08_
 
 Prioritized list of known issues. Severity bands:
 
@@ -30,4 +30,6 @@ _None tracked yet. Add new entries here as they are discovered. Do not act on a 
 
 ## Resolved
 
-_(none yet)_
+- **2026-07-08 — Turno parser:** standalone `ROOM ONE`–`ROOM FIVE` cleanings (blank `Property Group`) landed in "Other"; they now map to the MARU section, so they also count in Summary "Total Cleans" / "Pay/Job".
+- **2026-07-08 — Worker sheets:** removed the "Apt X" / "Details here" placeholder rows from the cleaning sections; empty sections keep one blank row for manual entries.
+- **2026-07-08 — GUI:** `payroll_app.py` used `importlib.util` while importing only `importlib` (worked via side-effect imports); now imports `importlib.util` explicitly. Turno tooltip copy updated to include the MARU section.

@@ -59,6 +59,9 @@ def map_turno_location(property_group, property_alias):
         return "Casa Damisela"
     if "MARU" in combined:
         return "MARU"
+    # MARU rooms are exported with a blank Property Group and aliases like "ROOM ONE".
+    if re.search(r"\bROOM\s+(ONE|TWO|THREE|FOUR|FIVE|[1-5])\b", combined):
+        return "MARU"
     return "Other"
 
 
@@ -482,7 +485,7 @@ def _parse_turno(turno_csv, persons, hourly_events, turno_events, rates_by_name,
             "hours": hours_worked,
             "rate": float(row["Cleaning Price"]),
             "details": property_group,
-            "label": property_alias or "Details here",
+            "label": property_alias,
             "start_dt": start_dt,
         }
         turno_events[person_key][location].append(event)
@@ -778,8 +781,7 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
                 "dollar_total_cell": f"G{total_row + 1}",
             }
 
-        def write_location_section(worksheet, start_row, header_title, placeholders=None, data_rows=None):
-            placeholders = placeholders or ["Apt X", "Apt X"]
+        def write_location_section(worksheet, start_row, header_title, data_rows=None):
             data_rows = data_rows or []
             worksheet.write(start_row, 0, header_title, header_format)
             section_headers = ["Date", "Start", "End", "Hours", "Rate $", "Details"]
@@ -787,12 +789,13 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
                 worksheet.write(start_row, col, name, header_format)
 
             data_start = start_row + 1
-            row_count = max(len(placeholders), len(data_rows), 1)
+            # Keep one blank row in empty sections for manual additions and valid SUM ranges.
+            row_count = max(len(data_rows), 1)
             for offset in range(row_count):
-                label = placeholders[offset] if offset < len(placeholders) else ""
+                label = ""
                 if offset < len(data_rows):
                     row_data = data_rows[offset]
-                    label = row_data.get("label", label)
+                    label = row_data.get("label", "")
                     worksheet.write(data_start + offset, 1, row_data.get("date", ""))
                     worksheet.write(data_start + offset, 2, row_data.get("start", ""))
                     worksheet.write(data_start + offset, 3, row_data.get("end", ""))
@@ -897,17 +900,11 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
 
             should_show_clean_sections = "Housekeeping" in role or _has_turno_rows(person_turno)
             if should_show_clean_sections:
-                clean_section_definitions = [
-                    ("Mango Villas", ["Apt X", "Apt X"]),
-                    ("Casa Damisela", ["Apt X", "Apt X"]),
-                    ("MARU", ["Apt X", "Apt X"]),
-                ]
-                for section_header, placeholders in clean_section_definitions:
+                for section_header in ["Mango Villas", "Casa Damisela", "MARU"]:
                     section_info = write_location_section(
                         worksheet,
                         current_section_row,
                         section_header,
-                        placeholders,
                         person_turno.get(section_header, []),
                     )
                     section_hours_cells.append(section_info["hours_total_cell"])
@@ -919,7 +916,6 @@ def process_timesheet(csv_file, output_excel, turno_csv=None, rates_csv=None, no
                 worksheet,
                 current_section_row,
                 "Other",
-                ["Details here", ""],
                 person_turno.get("Other", []),
             )
             section_hours_cells.append(other_section_info["hours_total_cell"])

@@ -6,7 +6,7 @@ then runs the export-timesheet process and displays results.
 """
 
 import calendar
-import importlib
+import importlib.util
 import json
 import os
 import re
@@ -328,7 +328,7 @@ class PayrollApp(tk.Tk):
         turno_label = label_with_tip(
             self,
             "Turno Report:",
-            "Cleaning job report exported from Turno. This feeds the Mango Villas, Casa Damisela, and Other sections.",
+            "Cleaning job report exported from Turno. This feeds the Mango Villas, Casa Damisela, MARU, and Other sections.",
         )
         turno_label.grid(row=row, column=0, columnspan=2, sticky="w", **pad)
         row += 1

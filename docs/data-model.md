@@ -1,6 +1,6 @@
 # Data Model
 
-_Last updated: 2026-05-21_
+_Last updated: 2026-07-08_
 
 ## Sources of truth
 
@@ -49,7 +49,7 @@ Required columns: `Teammate`, `Start Date & Time`, `End Date & Time`, `Cleaning 
 
 Rules:
 
-- Location bucket is derived from `Property Group` + `Property Alias`: `MANGO` → "Mango Villas", `DAMISELA` → "Casa Damisela", `MARU` → "MARU", else "Other".
+- Location bucket is derived from `Property Group` + `Property Alias`: `MANGO` → "Mango Villas", `DAMISELA` → "Casa Damisela", `MARU` → "MARU", else "Other". Standalone room aliases `ROOM ONE` … `ROOM FIVE` (or `ROOM 1`–`ROOM 5`), which Turno exports with a blank `Property Group`, also map to "MARU".
 - When multiple teammates appear on the same `Property Alias` + date, the cleaning price is split evenly across them (`_parse_turno`).
 - Hours computed from start/end. If outside `[0.25, 5]` they are clamped to a flat 2.0 (defensive default for malformed exports).
 - Rows missing teammate, with invalid name tokens, or with missing start/end are skipped with a warning.
